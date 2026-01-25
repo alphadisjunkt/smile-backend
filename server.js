@@ -16,14 +16,20 @@ const PORT = process.env.PORT || 3001;
 // Cache results for 1 hour
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 });
 
+// CORS - Allow all origins for now (we'll restrict later)
 app.use(cors({
-  origin: ['https://realsmile.online', 'https://smile-score-clean.vercel.app', 'http://localhost:3000'],
-  credentials: true
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+  credentials: false
 }));
+
+// Handle preflight
+app.options('*', cors());
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 50, // Increased from 20 for testing
   message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -46,14 +52,19 @@ async function loadModels() {
   console.log('Loading AI models...');
   const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
   
-  await Promise.all([
-    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-    faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
-  ]);
-  
-  modelsLoaded = true;
-  console.log('✅ Models loaded successfully');
+  try {
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
+    ]);
+    
+    modelsLoaded = true;
+    console.log('✅ Models loaded successfully');
+  } catch (error) {
+    console.error('❌ Failed to load models:', error);
+    throw error;
+  }
 }
 
 function calculateEyeConstriction(landmarks) {
@@ -158,14 +169,17 @@ app.post('/analyze', async (req, res) => {
   const startTime = Date.now();
   requestCount++;
   
-  console.log(`📸 Analysis request #${requestCount}`);
+  console.log(`📸 Analysis request #${requestCount} from ${req.ip}`);
   
   try {
     const { image } = req.body;
     
     if (!image) {
+      console.log('❌ No image in request body');
       return res.status(400).json({ error: 'No image provided' });
     }
+    
+    console.log(`📊 Image size: ${Math.round(image.length / 1024)}KB`);
     
     // Check cache
     const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
@@ -174,12 +188,14 @@ app.post('/analyze', async (req, res) => {
     
     if (cachedResult) {
       cacheHits++;
-      console.log(`✅ Cache hit! Returning cached result (${cacheHits}/${requestCount})`);
+      console.log(`✅ Cache hit! (${cacheHits}/${requestCount})`);
       return res.json(cachedResult);
     }
     
+    console.log('🔄 Loading models...');
     await loadModels();
     
+    console.log('🖼️  Processing image...');
     const buffer = Buffer.from(base64Data, 'base64');
     const img = new Image();
     img.src = buffer;
@@ -200,6 +216,7 @@ app.post('/analyze', async (req, res) => {
     console.log(`✅ Found ${detections.length} face(s) in ${processingTime}ms`);
     
     if (!detections || detections.length === 0) {
+      console.log('⚠️  No faces detected');
       return res.json({ people: [] });
     }
     
@@ -256,11 +273,13 @@ app.post('/analyze', async (req, res) => {
     
     // Cache the result
     cache.set(imageHash, result);
+    console.log(`💾 Cached result for future requests`);
     
     res.json(result);
     
   } catch (error) {
-    console.error('❌ Analysis error:', error);
+    const processingTime = Date.now() - startTime;
+    console.error(`❌ Analysis error after ${processingTime}ms:`, error);
     res.status(500).json({ 
       error: 'Analysis failed', 
       message: error.message 
@@ -268,12 +287,16 @@ app.post('/analyze', async (req, res) => {
   }
 });
 
-loadModels().catch(err => {
-  console.error('Failed to preload models:', err);
+// Preload models on startup
+console.log('🚀 Starting server...');
+loadModels().then(() => {
+  console.log('✅ Startup complete');
+}).catch(err => {
+  console.error('❌ Failed to preload models:', err);
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`💰 Rate limit: 20 requests per 15 minutes per IP`);
+  console.log(`💰 Rate limit: 50 requests per 15 minutes per IP`);
   console.log(`💾 Cache enabled: 1 hour TTL`);
 });
