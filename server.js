@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const faceapi = require('@vladmandic/face-api');
 const canvas = require('canvas');
 const tf = require('@tensorflow/tfjs-node');
@@ -10,14 +11,27 @@ faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// CORS - only allow your domains
 app.use(cors({
   origin: ['https://realsmile.online', 'https://smile-score-clean.vercel.app', 'http://localhost:3000'],
   credentials: true
 }));
 
-app.use(express.json({ limit: '50mb' }));
+// Rate limiting: 20 requests per 15 minutes per IP
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // limit each IP to 20 requests per windowMs
+  message: { error: 'Too many requests, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/analyze', limiter);
+app.use(express.json({ limit: '10mb' })); // Limit payload size
 
 let modelsLoaded = false;
+let requestCount = 0;
+let totalProcessingTime = 0;
 
 async function loadModels() {
   if (modelsLoaded) {
@@ -118,12 +132,23 @@ app.get('/', (req, res) => {
   res.json({ 
     status: 'ok', 
     message: 'RealSmile API Server',
-    modelsLoaded 
+    modelsLoaded,
+    stats: {
+      totalRequests: requestCount,
+      avgProcessingTime: requestCount > 0 ? (totalProcessingTime / requestCount).toFixed(2) + 'ms' : '0ms'
+    }
   });
 });
 
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy', modelsLoaded });
+});
+
 app.post('/analyze', async (req, res) => {
-  console.log('📸 Analysis request received');
+  const startTime = Date.now();
+  requestCount++;
+  
+  console.log(`📸 Analysis request #${requestCount}`);
   
   try {
     const { image } = req.body;
@@ -151,7 +176,10 @@ app.post('/analyze', async (req, res) => {
       .withFaceLandmarks()
       .withFaceExpressions();
     
-    console.log(`✅ Found ${detections.length} face(s)`);
+    const processingTime = Date.now() - startTime;
+    totalProcessingTime += processingTime;
+    
+    console.log(`✅ Found ${detections.length} face(s) in ${processingTime}ms`);
     
     if (!detections || detections.length === 0) {
       return res.json({ people: [] });
@@ -206,7 +234,6 @@ app.post('/analyze', async (req, res) => {
       };
     });
     
-    console.log('✨ Analysis complete');
     res.json({ people });
     
   } catch (error) {
@@ -225,4 +252,5 @@ loadModels().catch(err => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`💰 Rate limit: 20 requests per 15 minutes per IP`);
 });
