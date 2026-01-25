@@ -1,9 +1,11 @@
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const NodeCache = require('node-cache');
 const faceapi = require('@vladmandic/face-api');
 const canvas = require('canvas');
 const tf = require('@tensorflow/tfjs-node');
+const crypto = require('crypto');
 
 const { Canvas, Image, ImageData } = canvas;
 faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
@@ -11,26 +13,28 @@ faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS - only allow your domains
+// Cache results for 1 hour
+const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 });
+
 app.use(cors({
   origin: ['https://realsmile.online', 'https://smile-score-clean.vercel.app', 'http://localhost:3000'],
   credentials: true
 }));
 
-// Rate limiting: 20 requests per 15 minutes per IP
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // limit each IP to 20 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 20,
   message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 app.use('/analyze', limiter);
-app.use(express.json({ limit: '10mb' })); // Limit payload size
+app.use(express.json({ limit: '10mb' }));
 
 let modelsLoaded = false;
 let requestCount = 0;
+let cacheHits = 0;
 let totalProcessingTime = 0;
 
 async function loadModels() {
@@ -128,6 +132,10 @@ function calculateSymmetry(landmarks) {
   return Math.round(symmetryRatio * 100);
 }
 
+function hashImage(base64Data) {
+  return crypto.createHash('md5').update(base64Data).digest('hex');
+}
+
 app.get('/', (req, res) => {
   res.json({ 
     status: 'ok', 
@@ -135,6 +143,8 @@ app.get('/', (req, res) => {
     modelsLoaded,
     stats: {
       totalRequests: requestCount,
+      cacheHits: cacheHits,
+      cacheHitRate: requestCount > 0 ? ((cacheHits / requestCount) * 100).toFixed(1) + '%' : '0%',
       avgProcessingTime: requestCount > 0 ? (totalProcessingTime / requestCount).toFixed(2) + 'ms' : '0ms'
     }
   });
@@ -157,12 +167,20 @@ app.post('/analyze', async (req, res) => {
       return res.status(400).json({ error: 'No image provided' });
     }
     
+    // Check cache
+    const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
+    const imageHash = hashImage(base64Data);
+    const cachedResult = cache.get(imageHash);
+    
+    if (cachedResult) {
+      cacheHits++;
+      console.log(`✅ Cache hit! Returning cached result (${cacheHits}/${requestCount})`);
+      return res.json(cachedResult);
+    }
+    
     await loadModels();
     
-    // Convert base64 to Image
-    const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
     const buffer = Buffer.from(base64Data, 'base64');
-    
     const img = new Image();
     img.src = buffer;
     
@@ -234,7 +252,12 @@ app.post('/analyze', async (req, res) => {
       };
     });
     
-    res.json({ people });
+    const result = { people };
+    
+    // Cache the result
+    cache.set(imageHash, result);
+    
+    res.json(result);
     
   } catch (error) {
     console.error('❌ Analysis error:', error);
@@ -245,7 +268,6 @@ app.post('/analyze', async (req, res) => {
   }
 });
 
-// Preload models on startup
 loadModels().catch(err => {
   console.error('Failed to preload models:', err);
 });
@@ -253,4 +275,5 @@ loadModels().catch(err => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`💰 Rate limit: 20 requests per 15 minutes per IP`);
+  console.log(`💾 Cache enabled: 1 hour TTL`);
 });
