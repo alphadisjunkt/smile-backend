@@ -16,7 +16,20 @@ const PORT = process.env.PORT || 3001;
 // Cache results for 1 hour
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 });
 
-// CORS - Allow all origins for now (we'll restrict later)
+// Track daily analyses - resets daily at midnight
+let dailyCount = 24 // Start from your current count
+let lastResetDate = new Date().toDateString()
+
+// Reset counter daily
+const checkDailyReset = () => {
+  const today = new Date().toDateString()
+  if (today !== lastResetDate) {
+    dailyCount = 0
+    lastResetDate = today
+    console.log('📊 Daily counter reset')
+  }
+}
+
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -24,12 +37,11 @@ app.use(cors({
   credentials: false
 }));
 
-// Handle preflight
 app.options('*', cors());
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 50, // Increased from 20 for testing
+  max: 50,
   message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -147,11 +159,33 @@ function hashImage(base64Data) {
   return crypto.createHash('md5').update(base64Data).digest('hex');
 }
 
+// NEW: Get daily count endpoint
+app.get('/count', (req, res) => {
+  checkDailyReset()
+  res.json({ 
+    count: dailyCount,
+    date: lastResetDate
+  })
+})
+
+// NEW: Increment count endpoint  
+app.post('/count/increment', (req, res) => {
+  checkDailyReset()
+  dailyCount++
+  console.log(`📊 Daily count: ${dailyCount}`)
+  res.json({ 
+    count: dailyCount,
+    date: lastResetDate
+  })
+})
+
 app.get('/', (req, res) => {
+  checkDailyReset()
   res.json({ 
     status: 'ok', 
     message: 'RealSmile API Server',
     modelsLoaded,
+    dailyAnalyses: dailyCount,
     stats: {
       totalRequests: requestCount,
       cacheHits: cacheHits,
@@ -181,7 +215,6 @@ app.post('/analyze', async (req, res) => {
     
     console.log(`📊 Image size: ${Math.round(image.length / 1024)}KB`);
     
-    // Check cache
     const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
     const imageHash = hashImage(base64Data);
     const cachedResult = cache.get(imageHash);
@@ -271,7 +304,6 @@ app.post('/analyze', async (req, res) => {
     
     const result = { people };
     
-    // Cache the result
     cache.set(imageHash, result);
     console.log(`💾 Cached result for future requests`);
     
@@ -287,7 +319,6 @@ app.post('/analyze', async (req, res) => {
   }
 });
 
-// Preload models on startup
 console.log('🚀 Starting server...');
 loadModels().then(() => {
   console.log('✅ Startup complete');
@@ -299,4 +330,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`💰 Rate limit: 50 requests per 15 minutes per IP`);
   console.log(`💾 Cache enabled: 1 hour TTL`);
+  console.log(`📊 Daily analyses: ${dailyCount}`);
 });
