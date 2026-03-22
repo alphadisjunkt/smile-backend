@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3001;
 
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 });
 
-let totalCount = 0; // Starting baseline
+let totalCount = 0;
 
 app.use(cors({
   origin: '*',
@@ -35,6 +35,7 @@ const limiter = rateLimit({
 });
 
 app.use('/analyze', limiter);
+app.use('/landmarks', limiter);
 app.use(express.json({ limit: '10mb' }));
 
 let modelsLoaded = false;
@@ -150,7 +151,6 @@ app.get('/count', (req, res) => {
   res.json({ count: totalCount });
 });
 
-// NEW INCREMENT ENDPOINT
 app.post('/count/increment', (req, res) => {
   totalCount++;
   console.log(`📊 Count incremented to: ${totalCount}`);
@@ -175,6 +175,10 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', modelsLoaded });
 });
+
+// ═══════════════════════════════════════════════════════
+// SMILE ANALYSIS (existing)
+// ═══════════════════════════════════════════════════════
 
 app.post('/analyze', async (req, res) => {
   const startTime = Date.now();
@@ -298,6 +302,92 @@ app.post('/analyze', async (req, res) => {
     });
   }
 });
+
+// ═══════════════════════════════════════════════════════
+// LANDMARKS EXTRACTION (for looksmaxxing test on mobile)
+// ═══════════════════════════════════════════════════════
+
+app.post('/landmarks', async (req, res) => {
+  const startTime = Date.now();
+  requestCount++;
+  
+  console.log(`🔬 Landmarks request #${requestCount} from ${req.ip}`);
+  
+  try {
+    const { image } = req.body;
+    
+    if (!image) {
+      return res.status(400).json({ error: 'No image provided' });
+    }
+    
+    console.log(`📊 Image size: ${Math.round(image.length / 1024)}KB`);
+    
+    const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
+    const imageHash = 'lm_' + hashImage(base64Data);
+    const cachedResult = cache.get(imageHash);
+    
+    if (cachedResult) {
+      cacheHits++;
+      console.log(`✅ Landmarks cache hit!`);
+      return res.json(cachedResult);
+    }
+    
+    await loadModels();
+    
+    const buffer = Buffer.from(base64Data, 'base64');
+    const img = new Image();
+    img.src = buffer;
+    
+    const detections = await faceapi
+      .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({
+        inputSize: 512,
+        scoreThreshold: 0.3
+      }))
+      .withFaceLandmarks()
+      .withFaceExpressions();
+    
+    const processingTime = Date.now() - startTime;
+    totalProcessingTime += processingTime;
+    
+    if (!detections || detections.length === 0) {
+      console.log('⚠️  No faces detected for landmarks');
+      return res.json({ landmarks: null, error: 'No face detected' });
+    }
+    
+    // Pick largest face
+    const detection = detections.sort((a, b) => 
+      b.detection.box.width * b.detection.box.height - a.detection.box.width * a.detection.box.height
+    )[0];
+    
+    // Return raw 68-point landmarks
+    const positions = detection.landmarks.positions.map(p => ({
+      x: p.x || p._x,
+      y: p.y || p._y
+    }));
+    
+    const result = {
+      landmarks: positions,
+      imageWidth: img.width,
+      imageHeight: img.height,
+      confidence: detection.detection.score,
+      processingTime
+    };
+    
+    cache.set(imageHash, result);
+    totalCount++;
+    
+    console.log(`✅ Landmarks extracted (${positions.length} points) in ${processingTime}ms`);
+    res.json(result);
+    
+  } catch (error) {
+    console.error(`❌ Landmarks error:`, error);
+    res.status(500).json({ error: 'Landmarks extraction failed', message: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+// START SERVER
+// ═══════════════════════════════════════════════════════
 
 console.log('🚀 Starting server...');
 loadModels().then(() => {
