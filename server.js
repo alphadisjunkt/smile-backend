@@ -36,7 +36,7 @@ const limiter = rateLimit({
 
 app.use('/analyze', limiter);
 app.use('/landmarks', limiter);
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: "25mb" }));
 
 let modelsLoaded = false;
 let requestCount = 0;
