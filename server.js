@@ -13,6 +13,10 @@ faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Required for Railway / Render / Heroku reverse proxy — lets express-rate-limit
+// see the real client IP instead of the proxy IP, avoiding false rate-limit crashes
+app.set('trust proxy', 1);
+
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 });
 
 let totalCount = 0;
@@ -26,6 +30,9 @@ app.use(cors({
 
 app.options('*', cors());
 
+// Body parser BEFORE rate limiter so req.body is available if limiter needs it
+app.use(express.json({ limit: "25mb" }));
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 50,
@@ -36,7 +43,6 @@ const limiter = rateLimit({
 
 app.use('/analyze', limiter);
 app.use('/landmarks', limiter);
-app.use(express.json({ limit: "25mb" }));
 
 let modelsLoaded = false;
 let requestCount = 0;
