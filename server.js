@@ -396,30 +396,50 @@ app.post('/landmarks', async (req, res) => {
 // EMAIL / SUBSCRIBER ENDPOINT
 // ═══════════════════════════════════════════════════════
 
-const subscribers = new Map(); // email → { source, score, tier, date, purchased, abandonTimer }
+const subscribers = new Map(); // email → { source, score, tier, date, purchased, nurseTimers }
 
-// 24h abandoned lead follow-up
-function scheduleAbandonEmail(email, score) {
+// Full nurture sequence: day 1, day 3, day 7
+function scheduleNurtureSequence(email, score) {
   const resendKey = process.env.RESEND_API_KEY;
-  if (!resendKey) return;
-  const timer = setTimeout(async () => {
+  if (!resendKey) return [];
+
+  async function sendIfNotPurchased(subject, html, tag) {
     const sub = subscribers.get(email);
-    if (!sub || sub.purchased) return; // already bought, skip
+    if (!sub || sub.purchased) return;
     try {
       const { Resend } = require('resend');
       const resend = new Resend(resendKey);
-      await resend.emails.send({
-        from: 'RealSmile <noreply@realsmile.online>',
-        to: email,
-        subject: '📊 Your looksmax report is still waiting',
-        html: buildAbandonEmail(score),
-      });
-      console.log(`[ABANDON EMAIL] Sent to ${email}`);
+      await resend.emails.send({ from: 'RealSmile <noreply@realsmile.online>', to: email, subject, html });
+      console.log(`[NURTURE ${tag}] Sent to ${email}`);
     } catch (err) {
-      console.error('[ABANDON EMAIL ERROR]', err.message);
+      console.error(`[NURTURE ${tag} ERROR]`, err.message);
     }
-  }, 24 * 60 * 60 * 1000); // 24 hours
-  return timer;
+  }
+
+  const t1 = setTimeout(() => sendIfNotPurchased(
+    '📊 Your looksmax report is still waiting',
+    buildAbandonEmail(score),
+    'DAY1'
+  ), 24 * 60 * 60 * 1000);
+
+  const t3 = setTimeout(() => sendIfNotPurchased(
+    `What a ${score ? score + '/100' : 'good'} score actually means for your dating life`,
+    buildDay3Email(score),
+    'DAY3'
+  ), 3 * 24 * 60 * 60 * 1000);
+
+  const t7 = setTimeout(() => sendIfNotPurchased(
+    '⏰ Last chance — your $4.99 report offer expires soon',
+    buildDay7Email(score),
+    'DAY7'
+  ), 7 * 24 * 60 * 60 * 1000);
+
+  return [t1, t3, t7];
+}
+
+// Legacy alias so existing call sites still work
+function scheduleAbandonEmail(email, score) {
+  return scheduleNurtureSequence(email, score)[0];
 }
 
 function buildAbandonEmail(score) {
@@ -442,6 +462,65 @@ function buildAbandonEmail(score) {
 </body></html>`;
 }
 
+function buildDay3Email(score) {
+  const tier = score >= 85 ? 'elite' : score >= 70 ? 'above average' : score >= 50 ? 'average' : 'below average';
+  const headline = score
+    ? `You scored ${score}/100 — here's what that actually means`
+    : "Here's what your looksmax score actually means";
+  const insight = score >= 70
+    ? `A ${score}/100 puts you in the top tier. Most people who score this high see the biggest gains from optimizing <strong style="color:#fff">one specific metric</strong> — not overhauling everything.`
+    : `A ${score}/100 means there are 2-3 specific metrics dragging your overall score down. The good news: these are almost always fixable without surgery or major lifestyle changes.`;
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0">
+  <div style="max-width:480px;margin:0 auto;padding:40px 24px">
+    <p style="font-size:12px;color:#4b5563;text-align:center;margin:0 0 24px;text-transform:uppercase;letter-spacing:0.1em">RealSmile · Day 3 Check-in</p>
+    <h1 style="font-size:22px;font-weight:900;margin:0 0 16px;letter-spacing:-0.03em;line-height:1.3">${headline}</h1>
+    <p style="font-size:14px;color:#9ca3af;margin:0 0 20px;line-height:1.6">${insight}</p>
+    <div style="background:#111;border:1px solid #1f2937;border-radius:16px;padding:20px;margin-bottom:24px">
+      <p style="font-size:12px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 12px">The 3 metrics that matter most</p>
+      ${[
+        { metric: 'Canthal Tilt', impact: 'Perceived confidence & attractiveness. Most improvable with grooming alone.' },
+        { metric: 'Jawline Angle', impact: 'Facial structure signal. Responds to body fat % and mastic gum chewing.' },
+        { metric: 'Facial Symmetry', impact: 'Baseline attractiveness. Often improvable with posture and skincare.' },
+      ].map(m => `<div style="margin-bottom:14px">
+        <p style="font-size:13px;font-weight:700;color:#fff;margin:0 0 2px">${m.metric}</p>
+        <p style="font-size:12px;color:#6b7280;margin:0">${m.impact}</p>
+      </div>`).join('')}
+    </div>
+    <p style="font-size:14px;color:#9ca3af;margin:0 0 20px;line-height:1.6">Your full report shows where <em>you specifically</em> rank on each metric — and exactly which one to fix first for the biggest result.</p>
+    <a href="https://realsmile.online/looksmaxxing-test" style="display:block;background:#fff;color:#000;text-align:center;padding:14px 24px;border-radius:50px;font-weight:900;font-size:15px;text-decoration:none;margin-bottom:12px">
+      Get My Full Report — $4.99 →
+    </a>
+    <p style="font-size:11px;color:#374151;text-align:center;margin:0">7-day money-back guarantee · One-time · realsmile.online</p>
+  </div>
+</body></html>`;
+}
+
+function buildDay7Email(score) {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0">
+  <div style="max-width:480px;margin:0 auto;padding:40px 24px">
+    <div style="background:#7f1d1d;border:1px solid #991b1b;border-radius:12px;padding:12px 16px;text-align:center;margin-bottom:24px">
+      <p style="font-size:12px;font-weight:700;color:#fca5a5;margin:0;text-transform:uppercase;letter-spacing:0.08em">Final notice — offer expires soon</p>
+    </div>
+    <h1 style="font-size:22px;font-weight:900;margin:0 0 8px;letter-spacing:-0.03em">One last time — your report is $4.99</h1>
+    ${score ? `<p style="font-size:15px;color:#9ca3af;margin:0 0 20px">Your score: <strong style="color:#fff;font-size:20px">${score}/100</strong></p>` : ''}
+    <p style="font-size:14px;color:#9ca3af;margin:0 0 20px;line-height:1.6">
+      Most guys who <em>don't</em> unlock their report end up spending months on the wrong things — hitting the gym hard when it's actually their canthal tilt and brow positioning holding them back.
+    </p>
+    <p style="font-size:14px;color:#9ca3af;margin:0 0 24px;line-height:1.6">
+      $4.99 is less than a coffee. The report shows you exactly what to fix — and what you can skip entirely.
+    </p>
+    <a href="https://realsmile.online/looksmaxxing-test" style="display:block;background:#fff;color:#000;text-align:center;padding:16px 24px;border-radius:50px;font-weight:900;font-size:16px;text-decoration:none;margin-bottom:12px">
+      Unlock My Report — $4.99 →
+    </a>
+    <p style="font-size:11px;color:#374151;text-align:center;margin:0">7-day money-back guarantee · One-time payment · No recurring charges</p>
+    <p style="font-size:10px;color:#1f2937;text-align:center;margin:12px 0 0">This is our final email. You won't hear from us again unless you choose to.</p>
+  </div>
+</body></html>`;
+}
+
 app.post('/subscribe', async (req, res) => {
   try {
     const { email, source, score, tier } = req.body || {};
@@ -453,13 +532,13 @@ app.post('/subscribe', async (req, res) => {
     const isNew = !existing.date;
     const isPurchaseNow = source === 'purchase';
 
-    // Cancel any pending abandon timer if this is a purchase
-    if (isPurchaseNow && existing.abandonTimer) {
-      clearTimeout(existing.abandonTimer);
+    // Cancel all pending nurture timers if this is a purchase
+    if (isPurchaseNow && existing.nurtureTimers) {
+      existing.nurtureTimers.forEach(t => t && clearTimeout(t));
     }
 
-    const abandonTimer = (!isPurchaseNow && isNew) ? scheduleAbandonEmail(email, score) : existing.abandonTimer;
-    subscribers.set(email, { source, score, tier, date: new Date().toISOString(), purchased: isPurchaseNow || existing.purchased, abandonTimer });
+    const nurtureTimers = (!isPurchaseNow && isNew) ? scheduleNurtureSequence(email, score) : (existing.nurtureTimers || []);
+    subscribers.set(email, { source, score, tier, date: new Date().toISOString(), purchased: isPurchaseNow || existing.purchased, nurtureTimers });
     console.log(`[SUBSCRIBE] ${email} — ${source || 'unknown'} — tier:${tier || 'none'} — score:${score || 'n/a'} — new:${isNew}`);
 
     // Send email via Resend if configured
