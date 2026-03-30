@@ -396,7 +396,51 @@ app.post('/landmarks', async (req, res) => {
 // EMAIL / SUBSCRIBER ENDPOINT
 // ═══════════════════════════════════════════════════════
 
-const subscribers = new Map(); // email → { source, score, tier, date }
+const subscribers = new Map(); // email → { source, score, tier, date, purchased, abandonTimer }
+
+// 24h abandoned lead follow-up
+function scheduleAbandonEmail(email, score) {
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) return;
+  const timer = setTimeout(async () => {
+    const sub = subscribers.get(email);
+    if (!sub || sub.purchased) return; // already bought, skip
+    try {
+      const { Resend } = require('resend');
+      const resend = new Resend(resendKey);
+      await resend.emails.send({
+        from: 'RealSmile <noreply@realsmile.online>',
+        to: email,
+        subject: '📊 Your looksmax report is still waiting',
+        html: buildAbandonEmail(score),
+      });
+      console.log(`[ABANDON EMAIL] Sent to ${email}`);
+    } catch (err) {
+      console.error('[ABANDON EMAIL ERROR]', err.message);
+    }
+  }, 24 * 60 * 60 * 1000); // 24 hours
+  return timer;
+}
+
+function buildAbandonEmail(score) {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0">
+  <div style="max-width:480px;margin:0 auto;padding:40px 24px">
+    <h1 style="font-size:22px;font-weight:900;text-align:center;margin:0 0 8px;letter-spacing:-0.03em">Your report is still available</h1>
+    ${score ? `<p style="font-size:15px;color:#9ca3af;text-align:center;margin:0 0 24px">You scored <strong style="color:#fff">${score}/100</strong> — see exactly what to improve</p>` : ''}
+    <div style="background:#111;border:1px solid #1f2937;border-radius:16px;padding:20px;margin-bottom:24px">
+      <p style="font-size:13px;color:#9ca3af;margin:0 0 12px">Your full report includes:</p>
+      ${['All 10 facial metrics scored and ranked', 'Your percentile vs analyzed faces', 'Which metrics need the most work', 'A personalized glow-up plan', 'Downloadable PDF'].map(f =>
+        `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="color:#10b981;font-weight:bold;font-size:12px">✓</span><span style="font-size:13px;color:#d1d5db">${f}</span></div>`
+      ).join('')}
+    </div>
+    <a href="https://realsmile.online/looksmaxxing-test" style="display:block;background:#fff;color:#000;text-align:center;padding:14px 24px;border-radius:50px;font-weight:900;font-size:15px;text-decoration:none;margin-bottom:12px">
+      Unlock Full Report — $4.99 →
+    </a>
+    <p style="font-size:11px;color:#374151;text-align:center;margin:0">7-day money-back guarantee · One-time payment · realsmile.online</p>
+  </div>
+</body></html>`;
+}
 
 app.post('/subscribe', async (req, res) => {
   try {
@@ -405,8 +449,17 @@ app.post('/subscribe', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email' });
     }
 
-    const isNew = !subscribers.has(email);
-    subscribers.set(email, { source, score, tier, date: new Date().toISOString() });
+    const existing = subscribers.get(email) || {};
+    const isNew = !existing.date;
+    const isPurchaseNow = source === 'purchase';
+
+    // Cancel any pending abandon timer if this is a purchase
+    if (isPurchaseNow && existing.abandonTimer) {
+      clearTimeout(existing.abandonTimer);
+    }
+
+    const abandonTimer = (!isPurchaseNow && isNew) ? scheduleAbandonEmail(email, score) : existing.abandonTimer;
+    subscribers.set(email, { source, score, tier, date: new Date().toISOString(), purchased: isPurchaseNow || existing.purchased, abandonTimer });
     console.log(`[SUBSCRIBE] ${email} — ${source || 'unknown'} — tier:${tier || 'none'} — score:${score || 'n/a'} — new:${isNew}`);
 
     // Send email via Resend if configured
