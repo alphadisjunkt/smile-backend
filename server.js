@@ -618,6 +618,214 @@ function buildLeadEmail(score) {
 }
 
 // ═══════════════════════════════════════════════════════
+// WIDGET PRO — KEY STORAGE + ENDPOINTS
+// ═══════════════════════════════════════════════════════
+
+const fs = require('fs');
+const KEYS_FILE = './widget-keys.json';
+const widgetKeys = new Map(); // key → { customerId, sessionId, subscriptionId, active, theme, email, createdAt }
+
+// Load persisted keys on startup
+try {
+  const raw = fs.readFileSync(KEYS_FILE, 'utf8');
+  Object.entries(JSON.parse(raw)).forEach(([k, v]) => widgetKeys.set(k, v));
+  console.log(`[WIDGET PRO] Loaded ${widgetKeys.size} keys`);
+} catch {}
+
+function saveWidgetKeys() {
+  try {
+    fs.writeFileSync(KEYS_FILE, JSON.stringify(Object.fromEntries(widgetKeys), null, 2));
+  } catch (err) {
+    console.error('[WIDGET KEYS SAVE ERROR]', err.message);
+  }
+}
+
+function generateWidgetKey() {
+  return `rspro_${crypto.randomBytes(20).toString('hex')}`;
+}
+
+// POST /widget-subscribe — create Stripe subscription checkout session
+app.post('/widget-subscribe', async (req, res) => {
+  try {
+    const { plan = 'monthly', email } = req.body || {};
+    const stripeKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeKey) return res.status(500).json({ error: 'Stripe not configured' });
+
+    const Stripe = require('stripe');
+    const stripe = Stripe(stripeKey);
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      customer_email: email || undefined,
+      line_items: [{
+        price_data: {
+          currency: 'usd',
+          product_data: {
+            name: 'Widget Pro',
+            description: 'White-label AI face analysis widgets — no branding, custom themes, analytics',
+          },
+          unit_amount: plan === 'annual' ? 7900 : 900,
+          recurring: { interval: plan === 'annual' ? 'year' : 'month' },
+        },
+        quantity: 1,
+      }],
+      success_url: 'https://realsmile.online/widget/pro?session_id={CHECKOUT_SESSION_ID}',
+      cancel_url: 'https://realsmile.online/widget',
+      metadata: { source: 'widget-pro', plan },
+      allow_promotion_codes: true,
+    });
+
+    console.log(`[WIDGET PRO] Checkout session created: ${session.id}`);
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('[WIDGET-SUBSCRIBE ERROR]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /widget-auth?key=xxx — validate key and return theme config
+app.get('/widget-auth', (req, res) => {
+  const { key } = req.query;
+  if (!key) return res.json({ valid: false });
+
+  const cacheHit = cache.get(`wk:${key}`);
+  if (cacheHit !== undefined) return res.json(cacheHit);
+
+  const data = widgetKeys.get(key);
+  const result = data && data.active
+    ? { valid: true, theme: data.theme || {} }
+    : { valid: false };
+
+  cache.set(`wk:${key}`, result, 3600);
+  res.json(result);
+});
+
+// GET /widget-key?session_id=xxx — retrieve or generate key after checkout
+app.get('/widget-key', async (req, res) => {
+  const { session_id } = req.query;
+  if (!session_id) return res.status(400).json({ error: 'missing session_id' });
+
+  // Check if already generated for this session
+  for (const [key, data] of widgetKeys.entries()) {
+    if (data.sessionId === session_id) {
+      return res.json({ key, email: data.email });
+    }
+  }
+
+  try {
+    const stripeKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeKey) return res.status(500).json({ error: 'Stripe not configured' });
+
+    const Stripe = require('stripe');
+    const stripe = Stripe(stripeKey);
+    const session = await stripe.checkout.sessions.retrieve(session_id);
+
+    if (session.metadata?.source !== 'widget-pro') {
+      return res.status(400).json({ error: 'Not a Widget Pro purchase' });
+    }
+    if (session.status !== 'complete') {
+      return res.status(402).json({ error: 'payment_required' });
+    }
+
+    // Check if key exists for this customer
+    for (const [key, data] of widgetKeys.entries()) {
+      if (data.customerId === session.customer) {
+        return res.json({ key, email: data.email });
+      }
+    }
+
+    // Generate new key
+    const key = generateWidgetKey();
+    const entry = {
+      customerId: session.customer,
+      sessionId: session_id,
+      subscriptionId: session.subscription,
+      active: true,
+      theme: {},
+      email: session.customer_details?.email,
+      createdAt: new Date().toISOString(),
+    };
+    widgetKeys.set(key, entry);
+    saveWidgetKeys();
+    console.log(`[WIDGET PRO] Key generated: ${key.slice(0, 16)}... for ${entry.email}`);
+
+    res.json({ key, email: entry.email });
+  } catch (err) {
+    console.error('[WIDGET-KEY ERROR]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /widget-theme — update theme for a key
+app.patch('/widget-theme', (req, res) => {
+  const { key, theme } = req.body || {};
+  if (!key || !widgetKeys.has(key)) return res.status(404).json({ error: 'Invalid key' });
+  const data = widgetKeys.get(key);
+  widgetKeys.set(key, { ...data, theme: { ...data.theme, ...theme } });
+  cache.del(`wk:${key}`); // invalidate cache
+  saveWidgetKeys();
+  res.json({ success: true });
+});
+
+// GET /widget-usage?key=xxx — basic usage stats (placeholder for analytics)
+app.get('/widget-usage', (req, res) => {
+  const { key } = req.query;
+  if (!key || !widgetKeys.has(key)) return res.status(404).json({ error: 'Invalid key' });
+  const data = widgetKeys.get(key);
+  res.json({ key: key.slice(0, 16) + '...', active: data.active, createdAt: data.createdAt, email: data.email });
+});
+
+// POST /widget-recover — send key to email (no accounts needed)
+app.post('/widget-recover', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'Invalid email' });
+
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) return res.status(500).json({ error: 'Email not configured' });
+
+  // Find key by email
+  let found = null;
+  for (const [key, data] of widgetKeys.entries()) {
+    if (data.email === email && data.active) { found = key; break; }
+  }
+
+  // Always respond success to prevent email enumeration
+  if (found) {
+    try {
+      const { Resend } = require('resend');
+      const resend = new Resend(resendKey);
+      await resend.emails.send({
+        from: 'RealSmile <noreply@realsmile.online>',
+        to: email,
+        subject: '🔑 Your Widget Pro key',
+        html: `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0">
+  <div style="max-width:480px;margin:0 auto;padding:40px 24px">
+    <h1 style="font-size:20px;font-weight:900;margin:0 0 16px;letter-spacing:-0.02em">Your Widget Pro key</h1>
+    <div style="background:#111;border:1px solid #1f2937;border-radius:12px;padding:16px;margin-bottom:20px">
+      <p style="font-size:11px;color:#6b7280;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.1em">Widget Key</p>
+      <code style="font-size:13px;color:#10b981;word-break:break-all">${found}</code>
+    </div>
+    <a href="https://realsmile.online/widget/pro" style="display:block;background:#fff;color:#000;text-align:center;padding:14px 24px;border-radius:50px;font-weight:900;font-size:14px;text-decoration:none;margin-bottom:12px">
+      Open Widget Dashboard →
+    </a>
+    <p style="font-size:11px;color:#374151;text-align:center">Keep this key private · realsmile.online</p>
+  </div>
+</body></html>`,
+      });
+      console.log(`[WIDGET RECOVER] Sent key to ${email}`);
+    } catch (err) {
+      console.error('[WIDGET RECOVER ERROR]', err.message);
+    }
+  } else {
+    console.log(`[WIDGET RECOVER] No key found for ${email}`);
+  }
+
+  res.json({ success: true }); // always success
+});
+
+// ═══════════════════════════════════════════════════════
 // START SERVER
 // ═══════════════════════════════════════════════════════
 
