@@ -419,7 +419,7 @@ app.post('/subscribe', async (req, res) => {
         const isPro = tier === 'pro';
 
         await resend.emails.send({
-          from: 'RealSmile <noreply@realsmile.online>',
+          from: 'RealSmile <noreply@send.realsmile.online>',
           to: email,
           subject: isPurchase
             ? (isPro ? '⚡ Your Pro Report is Ready' : '✓ Your Full Report is Unlocked')
