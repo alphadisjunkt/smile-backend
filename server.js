@@ -442,6 +442,46 @@ function scheduleAbandonEmail(email, score) {
   return scheduleNurtureSequence(email, score)[0];
 }
 
+// Post-purchase sequence for buyers: day 2, day 5, day 14
+function scheduleBuyerSequence(email, score, tier) {
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) return [];
+  const isPro = tier === 'pro';
+
+  async function sendBuyer(subject, html, tag) {
+    const sub = subscribers.get(email);
+    if (!sub) return;
+    try {
+      const { Resend } = require('resend');
+      const resend = new Resend(resendKey);
+      await resend.emails.send({ from: 'RealSmile <noreply@realsmile.online>', to: email, subject, html });
+      console.log(`[BUYER ${tag}] Sent to ${email}`);
+    } catch (err) {
+      console.error(`[BUYER ${tag} ERROR]`, err.message);
+    }
+  }
+
+  const t2 = setTimeout(() => sendBuyer(
+    `How to improve your ${score ? `${score}/100` : ''} score — start here`,
+    buildBuyerDay2Email(score, isPro),
+    'DAY2'
+  ), 2 * 24 * 60 * 60 * 1000);
+
+  const t5 = setTimeout(() => sendBuyer(
+    'Your 30-day looksmax plan (based on your metrics)',
+    buildBuyerDay5Email(score, isPro),
+    'DAY5'
+  ), 5 * 24 * 60 * 60 * 1000);
+
+  const t14 = setTimeout(() => sendBuyer(
+    isPro ? '📊 Time to rescan — has anything changed?' : '📊 Rescan ready — track your progress',
+    buildBuyerDay14Email(score, isPro),
+    'DAY14'
+  ), 14 * 24 * 60 * 60 * 1000);
+
+  return [t2, t5, t14];
+}
+
 function buildAbandonEmail(score) {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
 <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0">
@@ -521,6 +561,92 @@ function buildDay7Email(score) {
 </body></html>`;
 }
 
+function buildBuyerDay2Email(score, isPro) {
+  const topFix = score >= 70
+    ? 'Focus on your canthal tilt first — it has the highest visual impact per unit of effort. Brow grooming alone shifts perceived tilt by 1-2° for most people.'
+    : 'Start with your jawline angle. At your score range, reducing body fat by 5-8% typically improves jawline visibility more than any other intervention.';
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0">
+  <div style="max-width:480px;margin:0 auto;padding:40px 24px">
+    <p style="font-size:12px;color:#4b5563;text-align:center;margin:0 0 24px;text-transform:uppercase;letter-spacing:0.1em">Your Report · Day 2</p>
+    <h1 style="font-size:22px;font-weight:900;margin:0 0 16px;letter-spacing:-0.03em;line-height:1.3">
+      Where to start with your ${score ? `${score}/100` : ''} score
+    </h1>
+    <p style="font-size:14px;color:#9ca3af;margin:0 0 20px;line-height:1.6">${topFix}</p>
+    <div style="background:#111;border:1px solid #1f2937;border-radius:16px;padding:20px;margin-bottom:24px">
+      <p style="font-size:12px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 14px">Quick wins — no gym required</p>
+      ${[
+        { t: 'Brow grooming', d: 'Cleans up canthal tilt instantly. Takes 10 minutes.' },
+        { t: 'Mastic gum', d: '10-15 min/day builds masseter mass over 8 weeks.' },
+        { t: 'Posture correction', d: 'Forward head posture adds perceived face fat. Fix it.' },
+        { t: 'Skincare routine', d: 'Clear skin improves every metric\'s visual presentation.' },
+      ].map(i => `<div style="margin-bottom:12px"><p style="font-size:13px;font-weight:700;color:#fff;margin:0 0 2px">${i.t}</p><p style="font-size:12px;color:#6b7280;margin:0">${i.d}</p></div>`).join('')}
+    </div>
+    <a href="https://realsmile.online/shop" style="display:block;background:#fff;color:#000;text-align:center;padding:14px 24px;border-radius:50px;font-weight:900;font-size:14px;text-decoration:none;margin-bottom:12px">
+      See Recommended Products →
+    </a>
+    ${!isPro ? `<div style="background:#1e1b4b;border:1px solid #4f46e5;border-radius:12px;padding:14px;margin-bottom:20px;text-align:center">
+      <p style="font-size:12px;color:#c7d2fe;margin:0 0 6px">Want to track your progress over time?</p>
+      <a href="https://realsmile.online/looksmaxxing-test" style="color:#818cf8;font-weight:700;font-size:12px;text-decoration:none">Upgrade to Pro — $9.99 →</a>
+    </div>` : ''}
+    <p style="font-size:11px;color:#374151;text-align:center">RealSmile · realsmile.online</p>
+  </div>
+</body></html>`;
+}
+
+function buildBuyerDay5Email(score, isPro) {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0">
+  <div style="max-width:480px;margin:0 auto;padding:40px 24px">
+    <p style="font-size:12px;color:#4b5563;text-align:center;margin:0 0 24px;text-transform:uppercase;letter-spacing:0.1em">Your Report · Day 5</p>
+    <h1 style="font-size:22px;font-weight:900;margin:0 0 16px;letter-spacing:-0.03em;line-height:1.3">Your 30-day looksmax plan</h1>
+    <p style="font-size:14px;color:#9ca3af;margin:0 0 20px;line-height:1.6">Most people try to fix everything at once and fix nothing. Here's a focused 30-day protocol based on your metric profile:</p>
+    <div style="background:#111;border:1px solid #1f2937;border-radius:16px;padding:20px;margin-bottom:24px">
+      ${[
+        { week: 'Week 1', task: 'Grooming audit', detail: 'Brows, skin, haircut. Highest ROI per hour.' },
+        { week: 'Week 2', task: 'Start mastic gum', detail: '2x 15-min sessions/day. Builds masseter gradually.' },
+        { week: 'Week 3', task: 'Posture protocol', detail: '10 min/day neck stretches + chin tucks.' },
+        { week: 'Week 4', task: 'Photo review', detail: 'Retake your photo. Compare angles and lighting vs week 1.' },
+      ].map(w => `<div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #1f2937">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+          <span style="font-size:10px;font-weight:700;color:#4f46e5;background:#1e1b4b;padding:2px 8px;border-radius:50px">${w.week}</span>
+          <span style="font-size:13px;font-weight:700;color:#fff">${w.task}</span>
+        </div>
+        <p style="font-size:12px;color:#6b7280;margin:0">${w.detail}</p>
+      </div>`).join('')}
+    </div>
+    ${!isPro ? `<div style="background:#1e1b4b;border:1px solid #4f46e5;border-radius:12px;padding:14px;text-align:center;margin-bottom:20px">
+      <p style="font-size:13px;color:#c7d2fe;font-weight:700;margin:0 0 4px">Track your progress with Pro</p>
+      <p style="font-size:12px;color:#818cf8;margin:0 0 8px">Rescan after week 4 to see exactly which metrics improved.</p>
+      <a href="https://realsmile.online/looksmaxxing-test" style="color:#fff;font-weight:900;font-size:12px;text-decoration:none;background:#4f46e5;padding:8px 20px;border-radius:50px;display:inline-block">Upgrade to Pro — $9.99 →</a>
+    </div>` : `<div style="text-align:center;margin-bottom:20px"><a href="https://realsmile.online/looksmaxxing-test" style="color:#818cf8;font-weight:700;font-size:13px;text-decoration:none">Rescan now to track Week 1 progress →</a></div>`}
+    <p style="font-size:11px;color:#374151;text-align:center">RealSmile · realsmile.online</p>
+  </div>
+</body></html>`;
+}
+
+function buildBuyerDay14Email(score, isPro) {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0">
+  <div style="max-width:480px;margin:0 auto;padding:40px 24px">
+    <p style="font-size:12px;color:#4b5563;text-align:center;margin:0 0 24px;text-transform:uppercase;letter-spacing:0.1em">Your Report · Day 14</p>
+    <h1 style="font-size:22px;font-weight:900;margin:0 0 8px;letter-spacing:-0.03em;line-height:1.3">2 weeks in — time to measure</h1>
+    ${score ? `<p style="font-size:15px;color:#9ca3af;text-align:center;margin:0 0 20px">Starting score: <strong style="color:#fff">${score}/100</strong></p>` : ''}
+    <p style="font-size:14px;color:#9ca3af;margin:0 0 20px;line-height:1.6">If you've been following the plan, you should see visible changes in at least 1-2 metrics by now. The only way to know for sure is to rescan.</p>
+    ${isPro
+      ? `<a href="https://realsmile.online/looksmaxxing-test" style="display:block;background:#fff;color:#000;text-align:center;padding:14px 24px;border-radius:50px;font-weight:900;font-size:15px;text-decoration:none;margin-bottom:12px">Rescan Now — Track Progress →</a>
+         <p style="font-size:12px;color:#6b7280;text-align:center">Your Pro plan includes unlimited rescans. Before/after comparisons saved automatically.</p>`
+      : `<div style="background:#111;border:1px solid #10b981;border-radius:16px;padding:20px;margin-bottom:20px;text-align:center">
+           <p style="font-size:13px;font-weight:700;color:#10b981;margin:0 0 4px">See your progress</p>
+           <p style="font-size:12px;color:#9ca3af;margin:0 0 12px">Upgrade to Pro to rescan and compare your before/after metrics.</p>
+           <a href="https://realsmile.online/looksmaxxing-test" style="display:inline-block;background:#fff;color:#000;padding:10px 24px;border-radius:50px;font-weight:900;font-size:14px;text-decoration:none">Upgrade to Pro — $9.99</a>
+         </div>`
+    }
+    <p style="font-size:11px;color:#374151;text-align:center">RealSmile · This is our last scheduled email.</p>
+  </div>
+</body></html>`;
+}
+
 app.post('/subscribe', async (req, res) => {
   try {
     const { email, source, score, tier } = req.body || {};
@@ -538,7 +664,8 @@ app.post('/subscribe', async (req, res) => {
     }
 
     const nurtureTimers = (!isPurchaseNow && isNew) ? scheduleNurtureSequence(email, score) : (existing.nurtureTimers || []);
-    subscribers.set(email, { source, score, tier, date: new Date().toISOString(), purchased: isPurchaseNow || existing.purchased, nurtureTimers });
+    const buyerTimers = (isPurchaseNow && isNew) ? scheduleBuyerSequence(email, score, tier) : (existing.buyerTimers || []);
+    subscribers.set(email, { source, score, tier, date: new Date().toISOString(), purchased: isPurchaseNow || existing.purchased, nurtureTimers, buyerTimers });
     console.log(`[SUBSCRIBE] ${email} — ${source || 'unknown'} — tier:${tier || 'none'} — score:${score || 'n/a'} — new:${isNew}`);
 
     // Send email via Resend if configured
@@ -684,77 +811,56 @@ app.post('/widget-subscribe', async (req, res) => {
   }
 });
 
-// GET /widget-auth?key=xxx — validate key and return theme config
+// GET /widget-auth?key=xxx — validate key and return theme + customer info
 app.get('/widget-auth', (req, res) => {
-  const { key } = req.query;
+  const { key, full } = req.query;
   if (!key) return res.json({ valid: false });
 
-  const cacheHit = cache.get(`wk:${key}`);
+  const cacheHit = cache.get(`wk:${key}:${full || ''}`);
   if (cacheHit !== undefined) return res.json(cacheHit);
 
   const data = widgetKeys.get(key);
-  const result = data && data.active
-    ? { valid: true, theme: data.theme || {} }
-    : { valid: false };
+  if (!data || !data.active) {
+    const result = { valid: false };
+    cache.set(`wk:${key}:${full || ''}`, result, 3600);
+    return res.json(result);
+  }
 
-  cache.set(`wk:${key}`, result, 3600);
+  const result = full === '1'
+    ? { valid: true, theme: data.theme || {}, customerId: data.customerId, email: data.email }
+    : { valid: true, theme: data.theme || {} };
+
+  cache.set(`wk:${key}:${full || ''}`, result, 3600);
   res.json(result);
 });
 
-// GET /widget-key?session_id=xxx — retrieve or generate key after checkout
-app.get('/widget-key', async (req, res) => {
-  const { session_id } = req.query;
-  if (!session_id) return res.status(400).json({ error: 'missing session_id' });
+// POST /widget-key-provision — called by Next.js after Stripe verification
+// Stripe verification happens in Next.js (has the secret key); backend just handles storage
+app.post('/widget-key-provision', (req, res) => {
+  const { sessionId, customerId, subscriptionId, email } = req.body || {};
+  if (!sessionId) return res.status(400).json({ error: 'missing sessionId' });
 
-  // Check if already generated for this session
+  // Return existing key for this session
   for (const [key, data] of widgetKeys.entries()) {
-    if (data.sessionId === session_id) {
-      return res.json({ key, email: data.email });
+    if (data.sessionId === sessionId || data.customerId === customerId) {
+      return res.json({ key });
     }
   }
 
-  try {
-    const stripeKey = process.env.STRIPE_SECRET_KEY;
-    if (!stripeKey) return res.status(500).json({ error: 'Stripe not configured' });
-
-    const Stripe = require('stripe');
-    const stripe = Stripe(stripeKey);
-    const session = await stripe.checkout.sessions.retrieve(session_id);
-
-    if (session.metadata?.source !== 'widget-pro') {
-      return res.status(400).json({ error: 'Not a Widget Pro purchase' });
-    }
-    if (session.status !== 'complete') {
-      return res.status(402).json({ error: 'payment_required' });
-    }
-
-    // Check if key exists for this customer
-    for (const [key, data] of widgetKeys.entries()) {
-      if (data.customerId === session.customer) {
-        return res.json({ key, email: data.email });
-      }
-    }
-
-    // Generate new key
-    const key = generateWidgetKey();
-    const entry = {
-      customerId: session.customer,
-      sessionId: session_id,
-      subscriptionId: session.subscription,
-      active: true,
-      theme: {},
-      email: session.customer_details?.email,
-      createdAt: new Date().toISOString(),
-    };
-    widgetKeys.set(key, entry);
-    saveWidgetKeys();
-    console.log(`[WIDGET PRO] Key generated: ${key.slice(0, 16)}... for ${entry.email}`);
-
-    res.json({ key, email: entry.email });
-  } catch (err) {
-    console.error('[WIDGET-KEY ERROR]', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  // Generate new key
+  const key = generateWidgetKey();
+  widgetKeys.set(key, {
+    customerId: customerId || null,
+    sessionId,
+    subscriptionId: subscriptionId || null,
+    active: true,
+    theme: {},
+    email: email || null,
+    createdAt: new Date().toISOString(),
+  });
+  saveWidgetKeys();
+  console.log(`[WIDGET PRO] Key provisioned: ${key.slice(0, 16)}... for ${email}`);
+  res.json({ key });
 });
 
 // PATCH /widget-theme — update theme for a key
