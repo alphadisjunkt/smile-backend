@@ -392,6 +392,99 @@ app.post('/landmarks', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
+// EMAIL / SUBSCRIBER ENDPOINT
+// ═══════════════════════════════════════════════════════
+
+const subscribers = new Map(); // email → { source, score, tier, date }
+
+app.post('/subscribe', async (req, res) => {
+  try {
+    const { email, source, score, tier } = req.body || {};
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ error: 'Invalid email' });
+    }
+
+    const isNew = !subscribers.has(email);
+    subscribers.set(email, { source, score, tier, date: new Date().toISOString() });
+    console.log(`[SUBSCRIBE] ${email} — ${source || 'unknown'} — tier:${tier || 'none'} — score:${score || 'n/a'} — new:${isNew}`);
+
+    // Send email via Resend if configured
+    const resendKey = process.env.RESEND_API_KEY;
+    if (resendKey && isNew) {
+      try {
+        const { Resend } = require('resend');
+        const resend = new Resend(resendKey);
+        const isPurchase = source === 'purchase';
+        const isPro = tier === 'pro';
+
+        await resend.emails.send({
+          from: 'RealSmile <noreply@realsmile.online>',
+          to: email,
+          subject: isPurchase
+            ? (isPro ? '⚡ Your Pro Report is Ready' : '✓ Your Full Report is Unlocked')
+            : '📊 Your RealSmile Analysis',
+          html: isPurchase ? buildPurchaseEmail(score, isPro) : buildLeadEmail(score),
+        });
+        console.log(`[EMAIL SENT] ${email} — ${source}`);
+      } catch (err) {
+        console.error('[RESEND ERROR]', err.message);
+      }
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[SUBSCRIBE ERROR]', err);
+    res.json({ success: true });
+  }
+});
+
+app.get('/subscribers/count', (req, res) => {
+  res.json({ count: subscribers.size });
+});
+
+function buildPurchaseEmail(score, isPro) {
+  const color = isPro ? '#4f46e5' : '#10b981';
+  const icon = isPro ? '⚡' : '✓';
+  const features = ['All 10 facial metrics with scores', 'Percentile rankings vs analyzed faces', 'Personalized glow-up action plan', 'Downloadable PDF report',
+    ...(isPro ? ['Unlimited progress rescans', 'Before/after metric comparisons', 'Embed widget access'] : [])];
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0">
+  <div style="max-width:480px;margin:0 auto;padding:40px 24px">
+    <div style="text-align:center;margin-bottom:32px">
+      <div style="display:inline-block;background:${color};border-radius:50%;width:48px;height:48px;line-height:48px;font-size:24px;text-align:center">${icon}</div>
+      <h1 style="font-size:22px;font-weight:900;margin:16px 0 4px;letter-spacing:-0.03em">${isPro ? 'Pro Report Unlocked' : 'Full Report Unlocked'}</h1>
+    </div>
+    ${score ? `<div style="background:#111;border:1px solid #222;border-radius:16px;padding:20px;text-align:center;margin-bottom:24px">
+      <p style="color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 4px">Your Overall Score</p>
+      <p style="font-size:48px;font-weight:900;margin:0;color:#fff">${score}</p>
+    </div>` : ''}
+    ${features.map(f => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="color:#10b981;font-weight:bold">✓</span><span style="font-size:14px;color:#d1d5db">${f}</span></div>`).join('')}
+    <a href="https://realsmile.online/looksmaxxing-test" style="display:block;background:#fff;color:#000;text-align:center;padding:14px 24px;border-radius:50px;font-weight:900;font-size:15px;text-decoration:none;margin:24px 0 16px">
+      View Your Full Report →
+    </a>
+    ${!isPro ? `<div style="background:#1e1b4b;border:1px solid #4f46e5;border-radius:12px;padding:16px;margin-bottom:24px">
+      <p style="font-size:13px;color:#c7d2fe;margin:0">Want to track progress? <a href="https://realsmile.online/looksmaxxing-test" style="color:#818cf8;font-weight:700">Upgrade to Pro →</a></p>
+    </div>` : ''}
+    <p style="font-size:11px;color:#374151;text-align:center">RealSmile · 7-day money-back guarantee</p>
+  </div>
+</body></html>`;
+}
+
+function buildLeadEmail(score) {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0">
+  <div style="max-width:480px;margin:0 auto;padding:40px 24px">
+    <h1 style="font-size:22px;font-weight:900;text-align:center;margin:0 0 8px;letter-spacing:-0.03em">Your Analysis is Ready</h1>
+    ${score ? `<p style="font-size:15px;color:#9ca3af;text-align:center;margin:0 0 24px">You scored <strong style="color:#fff">${score}/100</strong></p>` : ''}
+    <a href="https://realsmile.online/looksmaxxing-test" style="display:block;background:#fff;color:#000;text-align:center;padding:14px 24px;border-radius:50px;font-weight:900;font-size:15px;text-decoration:none;margin-bottom:24px">
+      See Full Report — from $4.99 →
+    </a>
+    <p style="font-size:11px;color:#374151;text-align:center">RealSmile · realsmile.online</p>
+  </div>
+</body></html>`;
+}
+
+// ═══════════════════════════════════════════════════════
 // START SERVER
 // ═══════════════════════════════════════════════════════
 

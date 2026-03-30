@@ -6,13 +6,14 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "4.18.2",
+    "@tensorflow/tfjs-node": "4.11.0",
+    "@vladmandic/face-api": "1.7.12",
+    "canvas": "2.11.2",
     "cors": "2.8.5",
+    "express": "4.18.2",
     "express-rate-limit": "^7.1.5",
     "node-cache": "^5.1.2",
-    "@vladmandic/face-api": "1.7.12",
-    "@tensorflow/tfjs-node": "4.11.0",
-    "canvas": "2.11.2"
+    "resend": "^6.9.4"
   },
   "engines": {
     "node": "18.x"
