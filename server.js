@@ -340,38 +340,44 @@ app.post('/landmarks', async (req, res) => {
     }
     
     await loadModels();
-    
+
     const buffer = Buffer.from(base64Data, 'base64');
+
+    // Reject images over 5MB to prevent OOM crashes
+    if (buffer.length > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Image too large. Please resize to under 5MB.' });
+    }
+
     const img = new Image();
     img.src = buffer;
     
+    // Only detect face + landmarks (no expressions — saves ~100MB RAM)
     const detections = await faceapi
       .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({
-        inputSize: 512,
-        scoreThreshold: 0.3
+        inputSize: 416,
+        scoreThreshold: 0.25
       }))
-      .withFaceLandmarks()
-      .withFaceExpressions();
-    
+      .withFaceLandmarks();
+
     const processingTime = Date.now() - startTime;
     totalProcessingTime += processingTime;
-    
+
     if (!detections || detections.length === 0) {
       console.log('⚠️  No faces detected for landmarks');
       return res.json({ landmarks: null, error: 'No face detected' });
     }
-    
+
     // Pick largest face
-    const detection = detections.sort((a, b) => 
+    const detection = detections.sort((a, b) =>
       b.detection.box.width * b.detection.box.height - a.detection.box.width * a.detection.box.height
     )[0];
-    
+
     // Return raw 68-point landmarks
     const positions = detection.landmarks.positions.map(p => ({
       x: p.x || p._x,
       y: p.y || p._y
     }));
-    
+
     const result = {
       landmarks: positions,
       imageWidth: img.width,
@@ -379,7 +385,7 @@ app.post('/landmarks', async (req, res) => {
       confidence: detection.detection.score,
       processingTime
     };
-    
+
     cache.set(imageHash, result);
     totalCount++;
     
