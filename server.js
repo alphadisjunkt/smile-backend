@@ -402,13 +402,36 @@ app.post('/landmarks', async (req, res) => {
     const img = new Image();
     img.src = buffer;
     
-    // Only detect face + landmarks (no expressions — saves ~100MB RAM)
-    const detections = await faceapi
-      .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({
-        inputSize: 416,
-        scoreThreshold: 0.25
+    // Resize large images to prevent OOM and improve detection speed
+    const MAX_DIM = 1024;
+    let processImg = img;
+    if (img.width > MAX_DIM || img.height > MAX_DIM) {
+      const scale = MAX_DIM / Math.max(img.width, img.height);
+      const resizedCanvas = canvas.createCanvas(Math.round(img.width * scale), Math.round(img.height * scale));
+      const rCtx = resizedCanvas.getContext('2d');
+      rCtx.drawImage(img, 0, 0, resizedCanvas.width, resizedCanvas.height);
+      processImg = resizedCanvas;
+      console.log(`📐 Resized ${img.width}x${img.height} → ${resizedCanvas.width}x${resizedCanvas.height}`);
+    }
+
+    // Try with larger inputSize first for better accuracy, fall back to smaller
+    let detections = await faceapi
+      .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions({
+        inputSize: 512,
+        scoreThreshold: 0.2
       }))
       .withFaceLandmarks();
+
+    // Retry with even lower threshold if no face found
+    if (!detections || detections.length === 0) {
+      console.log('⚠️  Retrying with lower threshold...');
+      detections = await faceapi
+        .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions({
+          inputSize: 320,
+          scoreThreshold: 0.1
+        }))
+        .withFaceLandmarks();
+    }
 
     const processingTime = Date.now() - startTime;
     totalProcessingTime += processingTime;
@@ -423,10 +446,11 @@ app.post('/landmarks', async (req, res) => {
       b.detection.box.width * b.detection.box.height - a.detection.box.width * a.detection.box.height
     )[0];
 
-    // Return raw 68-point landmarks
+    // Return raw 68-point landmarks — scale back to original image coordinates if resized
+    const scaleBack = (processImg !== img) ? Math.max(img.width, img.height) / MAX_DIM : 1;
     const positions = detection.landmarks.positions.map(p => ({
-      x: p.x || p._x,
-      y: p.y || p._y
+      x: Math.round(((p.x || p._x) * scaleBack) * 10) / 10,
+      y: Math.round(((p.y || p._y) * scaleBack) * 10) / 10
     }));
 
     const result = {
@@ -805,7 +829,7 @@ function buildLeadEmail(score) {
 // WIDGET PRO — KEY STORAGE + ENDPOINTS
 // ═══════════════════════════════════════════════════════
 
-const fs = require('fs');
+// fs already required above for scan-history
 const KEYS_FILE = './widget-keys.json';
 const widgetKeys = new Map(); // key → { customerId, sessionId, subscriptionId, active, theme, email, createdAt }
 
