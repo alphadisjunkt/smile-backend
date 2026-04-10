@@ -164,9 +164,60 @@ app.post('/count/increment', (req, res) => {
   res.json({ count: totalCount, success: true });
 });
 
+// ── Scan History (progress tracking) ──────────────────────────────────────────
+const fs = require('fs');
+const SCAN_HISTORY_FILE = './scan-history.json';
+const scanHistory = new Map();
+
+// Load persisted scan history
+try {
+  if (fs.existsSync(SCAN_HISTORY_FILE)) {
+    const data = JSON.parse(fs.readFileSync(SCAN_HISTORY_FILE, 'utf8'));
+    Object.entries(data).forEach(([k, v]) => scanHistory.set(k, v));
+    console.log(`📋 Loaded ${scanHistory.size} scan histories`);
+  }
+} catch (e) { console.error('Failed to load scan history:', e.message); }
+
+function persistScanHistory() {
+  try {
+    const obj = Object.fromEntries(scanHistory);
+    fs.writeFileSync(SCAN_HISTORY_FILE, JSON.stringify(obj));
+  } catch (e) { console.error('Failed to persist scan history:', e.message); }
+}
+
+// Save a scan result
+app.post('/scan-history', (req, res) => {
+  const { userId, score, tier, strengths, improvements, metrics } = req.body;
+  if (!userId || typeof score !== 'number') {
+    return res.status(400).json({ error: 'userId and score required' });
+  }
+  const existing = scanHistory.get(userId) || [];
+  const record = {
+    date: new Date().toISOString(),
+    score: Math.round(score),
+    tier: tier || 'unknown',
+    topStrength: (strengths || [])[0] || '',
+    topImprovement: (improvements || [])[0] || '',
+    categoryScores: metrics || null,
+  };
+  // Keep max 50 scans per user
+  existing.push(record);
+  if (existing.length > 50) existing.splice(0, existing.length - 50);
+  scanHistory.set(userId, existing);
+  persistScanHistory();
+  console.log(`📋 Saved scan for ${userId}: score=${score}, total=${existing.length}`);
+  res.json({ success: true, totalScans: existing.length, record });
+});
+
+// Get scan history for a user
+app.get('/scan-history/:userId', (req, res) => {
+  const history = scanHistory.get(req.params.userId) || [];
+  res.json({ userId: req.params.userId, scans: history, totalScans: history.length });
+});
+
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     message: 'RealSmile API Server',
     modelsLoaded,
     totalAnalyses: totalCount,
