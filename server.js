@@ -215,6 +215,50 @@ app.get('/scan-history/:userId', (req, res) => {
   res.json({ userId: req.params.userId, scans: history, totalScans: history.length });
 });
 
+// ── Referral Program ─────────────────────────────────────────────────────────
+const REFERRAL_FILE = './referral-data.json';
+const referralData = new Map(); // referrerCode → { count, visitors: [] }
+
+// Load persisted referral data
+try {
+  if (fs.existsSync(REFERRAL_FILE)) {
+    const data = JSON.parse(fs.readFileSync(REFERRAL_FILE, 'utf8'));
+    Object.entries(data).forEach(([k, v]) => referralData.set(k, v));
+    console.log(`🔗 Loaded ${referralData.size} referral records`);
+  }
+} catch (e) { console.error('Failed to load referral data:', e.message); }
+
+function persistReferralData() {
+  try {
+    fs.writeFileSync(REFERRAL_FILE, JSON.stringify(Object.fromEntries(referralData)));
+  } catch (e) { console.error('Failed to persist referral data:', e.message); }
+}
+
+// Register a referral (visitor completed analysis via referrer's link)
+app.post('/referral/register', (req, res) => {
+  const { referrerCode, visitorCode } = req.body;
+  if (!referrerCode || !visitorCode) {
+    return res.status(400).json({ error: 'referrerCode and visitorCode required' });
+  }
+  const existing = referralData.get(referrerCode) || { count: 0, visitors: [] };
+  // Don't count same visitor twice
+  if (existing.visitors.includes(visitorCode)) {
+    return res.json({ success: true, count: existing.count, alreadyCounted: true });
+  }
+  existing.count++;
+  existing.visitors.push(visitorCode);
+  referralData.set(referrerCode, existing);
+  persistReferralData();
+  console.log(`🔗 Referral registered: ${referrerCode} now has ${existing.count} referrals`);
+  res.json({ success: true, count: existing.count });
+});
+
+// Get referral count for a code
+app.get('/referral/count/:code', (req, res) => {
+  const data = referralData.get(req.params.code) || { count: 0, visitors: [] };
+  res.json({ code: req.params.code, count: data.count });
+});
+
 app.get('/', (req, res) => {
   res.json({
     status: 'ok',
@@ -832,6 +876,48 @@ function buildLeadEmail(score) {
 // fs already required above for scan-history
 const KEYS_FILE = './widget-keys.json';
 const widgetKeys = new Map(); // key → { customerId, sessionId, subscriptionId, active, theme, email, createdAt }
+
+// Schedule 30-day re-scan reminder
+app.post('/schedule-rescan-reminder', async (req, res) => {
+  const { email, score, date } = req.body;
+  if (!email) return res.status(400).json({ error: 'email required' });
+
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) return res.json({ success: false, reason: 'no email config' });
+
+  // Schedule for 30 days from now
+  const reminderDate = new Date(date || Date.now());
+  reminderDate.setDate(reminderDate.getDate() + 30);
+
+  const delay = reminderDate.getTime() - Date.now();
+  if (delay > 0 && delay < 45 * 24 * 60 * 60 * 1000) { // max 45 days
+    setTimeout(async () => {
+      try {
+        const { Resend } = require('resend');
+        const resend = new Resend(resendKey);
+        await resend.emails.send({
+          from: 'RealSmile <noreply@realsmile.online>',
+          to: email,
+          subject: `Your face score was ${score}/100 — time to re-scan`,
+          html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+            <h2 style="margin:0 0 8px">Time to re-scan</h2>
+            <p style="color:#666;font-size:14px">30 days ago you scored <strong>${score}/100</strong> on your looksmax test. Have your metrics improved?</p>
+            <p style="color:#666;font-size:14px">Retake the test to track your progress — it's free.</p>
+            <a href="https://realsmile.online/looksmaxxing-test?utm_source=rescan&utm_medium=email" style="display:inline-block;background:#000;color:#fff;padding:12px 24px;border-radius:999px;text-decoration:none;font-weight:600;font-size:14px;margin-top:16px">Re-scan My Face →</a>
+            <p style="color:#999;font-size:11px;margin-top:24px">realsmile.online · <a href="https://realsmile.online/unsubscribe?email=${encodeURIComponent(email)}" style="color:#999">Unsubscribe</a></p>
+          </div>`,
+        });
+        console.log('[RESCAN REMINDER] Sent to', email);
+      } catch (err) {
+        console.error('[RESCAN REMINDER ERROR]', err.message);
+      }
+    }, delay);
+
+    console.log(`[RESCAN] Scheduled reminder for ${email} in ${Math.round(delay / 86400000)} days`);
+  }
+
+  res.json({ success: true, reminderDate: reminderDate.toISOString() });
+});
 
 // Load persisted keys on startup
 try {
