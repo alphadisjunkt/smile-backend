@@ -31,8 +31,8 @@ app.use(cors({
 
 app.options('*', cors());
 
-// Body parser BEFORE rate limiter so req.body is available if limiter needs it
-app.use(express.json({ limit: "25mb" }));
+// Body parser — reduced from 25mb to 5mb to prevent OOM on small Railway instances
+app.use(express.json({ limit: "5mb" }));
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -313,6 +313,13 @@ app.post('/analyze', async (req, res) => {
     
     console.log('🖼️  Processing image...');
     const buffer = Buffer.from(base64Data, 'base64');
+
+    // Cap image size to prevent OOM — reject if decoded buffer > 3MB
+    if (buffer.length > 3 * 1024 * 1024) {
+      console.log(`❌ Image too large: ${Math.round(buffer.length / 1024)}KB`);
+      return res.status(400).json({ error: 'Image too large. Please resize to under 1200px.' });
+    }
+
     const img = new Image();
     img.src = buffer;
     
@@ -408,13 +415,17 @@ app.post('/analyze', async (req, res) => {
     console.log(`💾 Cached result`);
     
     res.json(result);
-    
+
+    // Force garbage collection to prevent OOM on small instances
+    if (global.gc) { try { global.gc() } catch {} }
+
   } catch (error) {
     const processingTime = Date.now() - startTime;
     console.error(`❌ Analysis error after ${processingTime}ms:`, error);
-    res.status(500).json({ 
-      error: 'Analysis failed', 
-      message: error.message 
+    if (global.gc) { try { global.gc() } catch {} }
+    res.status(500).json({
+      error: 'Analysis failed',
+      message: error.message
     });
   }
 });
