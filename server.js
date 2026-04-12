@@ -322,7 +322,19 @@ app.post('/analyze', async (req, res) => {
 
     const img = new Image();
     img.src = buffer;
-    
+
+    // Resize large images to prevent OOM (same as /landmarks endpoint)
+    const MAX_DIM = 800;
+    let processImg = img;
+    if (img.width > MAX_DIM || img.height > MAX_DIM) {
+      const scale = MAX_DIM / Math.max(img.width, img.height);
+      const resizedCanvas = canvas.createCanvas(Math.round(img.width * scale), Math.round(img.height * scale));
+      const rCtx = resizedCanvas.getContext('2d');
+      rCtx.drawImage(img, 0, 0, resizedCanvas.width, resizedCanvas.height);
+      processImg = resizedCanvas;
+      console.log(`📐 Resized ${img.width}x${img.height} → ${resizedCanvas.width}x${resizedCanvas.height}`);
+    }
+
     console.log('🔍 Detecting faces...');
 
     // Detection cascade — try multiple configs like client-side
@@ -336,7 +348,7 @@ app.post('/analyze', async (req, res) => {
     for (const cfg of configs) {
       try {
         const result = await faceapi
-          .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions(cfg))
+          .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions(cfg))
           .withFaceLandmarks()
           .withFaceExpressions();
         if (result && result.length > 0) {
@@ -398,10 +410,10 @@ app.post('/analyze', async (req, res) => {
           symmetry
         },
         boundingBox: {
-          x: box.x / img.width,
-          y: box.y / img.height,
-          width: box.width / img.width,
-          height: box.height / img.height
+          x: box.x / processImg.width,
+          y: box.y / processImg.height,
+          width: box.width / processImg.width,
+          height: box.height / processImg.height
         }
       };
     });
