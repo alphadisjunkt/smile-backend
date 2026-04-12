@@ -317,22 +317,36 @@ app.post('/analyze', async (req, res) => {
     img.src = buffer;
     
     console.log('🔍 Detecting faces...');
-    
-    const detections = await faceapi
-      .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({
-        inputSize: 512,
-        scoreThreshold: 0.5
-      }))
-      .withFaceLandmarks()
-      .withFaceExpressions();
-    
+
+    // Detection cascade — try multiple configs like client-side
+    const configs = [
+      { inputSize: 320, scoreThreshold: 0.15 },
+      { inputSize: 512, scoreThreshold: 0.15 },
+      { inputSize: 224, scoreThreshold: 0.1 },
+    ];
+
+    let detections = null;
+    for (const cfg of configs) {
+      try {
+        const result = await faceapi
+          .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions(cfg))
+          .withFaceLandmarks()
+          .withFaceExpressions();
+        if (result && result.length > 0) {
+          detections = result;
+          console.log(`✅ Found ${result.length} face(s) with inputSize=${cfg.inputSize}, threshold=${cfg.scoreThreshold}`);
+          break;
+        }
+      } catch (e) {
+        console.warn(`⚠️ Detection failed with inputSize=${cfg.inputSize}:`, e.message);
+      }
+    }
+
     const processingTime = Date.now() - startTime;
     totalProcessingTime += processingTime;
-    
-    console.log(`✅ Found ${detections.length} face(s) in ${processingTime}ms`);
-    
+
     if (!detections || detections.length === 0) {
-      console.log('⚠️  No faces detected');
+      console.log(`⚠️  No faces detected after ${processingTime}ms`);
       return res.json({ people: [] });
     }
     
