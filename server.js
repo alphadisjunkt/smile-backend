@@ -591,7 +591,7 @@ function scheduleNurtureSequence(email, score) {
   ), 3 * 24 * 60 * 60 * 1000);
 
   const t7 = setTimeout(() => sendIfNotPurchased(
-    '⏰ Last chance — your $4.99 report offer expires soon',
+    '⏰ Last chance — your $14.99 report offer expires soon',
     buildDay7Email(score),
     'DAY7'
   ), 7 * 24 * 60 * 60 * 1000);
@@ -657,7 +657,7 @@ function buildAbandonEmail(score) {
       ).join('')}
     </div>
     <a href="https://realsmile.online/looksmaxxing-test" style="display:block;background:#fff;color:#000;text-align:center;padding:14px 24px;border-radius:50px;font-weight:900;font-size:15px;text-decoration:none;margin-bottom:12px">
-      Unlock Full Report — $4.99 →
+      Unlock Full Report — $14.99 →
     </a>
     <p style="font-size:11px;color:#374151;text-align:center;margin:0">7-day money-back guarantee · One-time payment · realsmile.online</p>
   </div>
@@ -692,7 +692,7 @@ function buildDay3Email(score) {
     </div>
     <p style="font-size:14px;color:#9ca3af;margin:0 0 20px;line-height:1.6">Your full report shows where <em>you specifically</em> rank on each metric — and exactly which one to fix first for the biggest result.</p>
     <a href="https://realsmile.online/looksmaxxing-test" style="display:block;background:#fff;color:#000;text-align:center;padding:14px 24px;border-radius:50px;font-weight:900;font-size:15px;text-decoration:none;margin-bottom:12px">
-      Get My Full Report — $4.99 →
+      Get My Full Report — $14.99 →
     </a>
     <p style="font-size:11px;color:#374151;text-align:center;margin:0">7-day money-back guarantee · One-time · realsmile.online</p>
   </div>
@@ -706,16 +706,16 @@ function buildDay7Email(score) {
     <div style="background:#7f1d1d;border:1px solid #991b1b;border-radius:12px;padding:12px 16px;text-align:center;margin-bottom:24px">
       <p style="font-size:12px;font-weight:700;color:#fca5a5;margin:0;text-transform:uppercase;letter-spacing:0.08em">Final notice — offer expires soon</p>
     </div>
-    <h1 style="font-size:22px;font-weight:900;margin:0 0 8px;letter-spacing:-0.03em">One last time — your report is $4.99</h1>
+    <h1 style="font-size:22px;font-weight:900;margin:0 0 8px;letter-spacing:-0.03em">One last time — your report is $14.99</h1>
     ${score ? `<p style="font-size:15px;color:#9ca3af;margin:0 0 20px">Your score: <strong style="color:#fff;font-size:20px">${score}/100</strong></p>` : ''}
     <p style="font-size:14px;color:#9ca3af;margin:0 0 20px;line-height:1.6">
       Most guys who <em>don't</em> unlock their report end up spending months on the wrong things — hitting the gym hard when it's actually their canthal tilt and brow positioning holding them back.
     </p>
     <p style="font-size:14px;color:#9ca3af;margin:0 0 24px;line-height:1.6">
-      $4.99 is less than a coffee. The report shows you exactly what to fix — and what you can skip entirely.
+      $14.99 is one-time. The report shows you exactly what to fix — and what you can skip entirely.
     </p>
     <a href="https://realsmile.online/looksmaxxing-test" style="display:block;background:#fff;color:#000;text-align:center;padding:16px 24px;border-radius:50px;font-weight:900;font-size:16px;text-decoration:none;margin-bottom:12px">
-      Unlock My Report — $4.99 →
+      Unlock My Report — $14.99 →
     </a>
     <p style="font-size:11px;color:#374151;text-align:center;margin:0">7-day money-back guarantee · One-time payment · No recurring charges</p>
     <p style="font-size:10px;color:#1f2937;text-align:center;margin:12px 0 0">This is our final email. You won't hear from us again unless you choose to.</p>
@@ -749,7 +749,7 @@ function buildBuyerDay2Email(score, isPro) {
     </a>
     ${!isPro ? `<div style="background:#1e1b4b;border:1px solid #4f46e5;border-radius:12px;padding:14px;margin-bottom:20px;text-align:center">
       <p style="font-size:12px;color:#c7d2fe;margin:0 0 6px">Want to track your progress over time?</p>
-      <a href="https://realsmile.online/looksmaxxing-test" style="color:#818cf8;font-weight:700;font-size:12px;text-decoration:none">Upgrade to Pro — $9.99 →</a>
+      <a href="https://realsmile.online/looksmaxxing-test" style="color:#818cf8;font-weight:700;font-size:12px;text-decoration:none">Upgrade to Pro — $19.99 →</a>
     </div>` : ''}
     <p style="font-size:11px;color:#374151;text-align:center">RealSmile · realsmile.online</p>
   </div>
@@ -780,7 +780,7 @@ function buildBuyerDay5Email(score, isPro) {
     ${!isPro ? `<div style="background:#1e1b4b;border:1px solid #4f46e5;border-radius:12px;padding:14px;text-align:center;margin-bottom:20px">
       <p style="font-size:13px;color:#c7d2fe;font-weight:700;margin:0 0 4px">Track your progress with Pro</p>
       <p style="font-size:12px;color:#818cf8;margin:0 0 8px">Rescan after week 4 to see exactly which metrics improved.</p>
-      <a href="https://realsmile.online/looksmaxxing-test" style="color:#fff;font-weight:900;font-size:12px;text-decoration:none;background:#4f46e5;padding:8px 20px;border-radius:50px;display:inline-block">Upgrade to Pro — $9.99 →</a>
+      <a href="https://realsmile.online/looksmaxxing-test" style="color:#fff;font-weight:900;font-size:12px;text-decoration:none;background:#4f46e5;padding:8px 20px;border-radius:50px;display:inline-block">Upgrade to Pro — $19.99 →</a>
     </div>` : `<div style="text-align:center;margin-bottom:20px"><a href="https://realsmile.online/looksmaxxing-test" style="color:#818cf8;font-weight:700;font-size:13px;text-decoration:none">Rescan now to track Week 1 progress →</a></div>`}
     <p style="font-size:11px;color:#374151;text-align:center">RealSmile · realsmile.online</p>
   </div>
@@ -801,7 +801,7 @@ function buildBuyerDay14Email(score, isPro) {
       : `<div style="background:#111;border:1px solid #10b981;border-radius:16px;padding:20px;margin-bottom:20px;text-align:center">
            <p style="font-size:13px;font-weight:700;color:#10b981;margin:0 0 4px">See your progress</p>
            <p style="font-size:12px;color:#9ca3af;margin:0 0 12px">Upgrade to Pro to rescan and compare your before/after metrics.</p>
-           <a href="https://realsmile.online/looksmaxxing-test" style="display:inline-block;background:#fff;color:#000;padding:10px 24px;border-radius:50px;font-weight:900;font-size:14px;text-decoration:none">Upgrade to Pro — $9.99</a>
+           <a href="https://realsmile.online/looksmaxxing-test" style="display:inline-block;background:#fff;color:#000;padding:10px 24px;border-radius:50px;font-weight:900;font-size:14px;text-decoration:none">Upgrade to Pro — $19.99</a>
          </div>`
     }
     <p style="font-size:11px;color:#374151;text-align:center">RealSmile · This is our last scheduled email.</p>
@@ -899,7 +899,7 @@ function buildLeadEmail(score) {
     <h1 style="font-size:22px;font-weight:900;text-align:center;margin:0 0 8px;letter-spacing:-0.03em">Your Analysis is Ready</h1>
     ${score ? `<p style="font-size:15px;color:#9ca3af;text-align:center;margin:0 0 24px">You scored <strong style="color:#fff">${score}/100</strong></p>` : ''}
     <a href="https://realsmile.online/looksmaxxing-test" style="display:block;background:#fff;color:#000;text-align:center;padding:14px 24px;border-radius:50px;font-weight:900;font-size:15px;text-decoration:none;margin-bottom:24px">
-      See Full Report — from $4.99 →
+      See Full Report — $14.99 →
     </a>
     <p style="font-size:11px;color:#374151;text-align:center">RealSmile · realsmile.online</p>
   </div>
