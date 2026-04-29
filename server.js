@@ -825,33 +825,23 @@ app.post('/subscribe', async (req, res) => {
       existing.nurtureTimers.forEach(t => t && clearTimeout(t));
     }
 
-    const nurtureTimers = (!isPurchaseNow && isNew) ? scheduleNurtureSequence(email, score) : (existing.nurtureTimers || []);
-    const buyerTimers = (isPurchaseNow && isNew) ? scheduleBuyerSequence(email, score, tier) : (existing.buyerTimers || []);
-    subscribers.set(email, { source, score, tier, date: new Date().toISOString(), purchased: isPurchaseNow || existing.purchased, nurtureTimers, buyerTimers });
-    console.log(`[SUBSCRIBE] ${email} — ${source || 'unknown'} — tier:${tier || 'none'} — score:${score || 'n/a'} — new:${isNew}`);
-
-    // Send email via Resend if configured
-    const resendKey = process.env.RESEND_API_KEY;
-    if (resendKey && isNew) {
-      try {
-        const { Resend } = require('resend');
-        const resend = new Resend(resendKey);
-        const isPurchase = source === 'purchase';
-        const isPro = tier === 'pro';
-
-        await resend.emails.send({
-          from: 'RealSmile <noreply@realsmile.online>',
-          to: email,
-          subject: isPurchase
-            ? (isPro ? '⚡ Your Pro Report is Ready' : '✓ Your Full Report is Unlocked')
-            : '📊 Your RealSmile Analysis',
-          html: isPurchase ? buildPurchaseEmail(score, isPro) : buildLeadEmail(score),
-        });
-        console.log(`[EMAIL SENT] ${email} — ${source}`);
-      } catch (err) {
-        console.error('[RESEND ERROR]', err.message);
-      }
-    }
+    // Email sends DISABLED on this backend as of 2026-04-29.
+    // The Next.js app (smile-score-clean) is now the single source of truth
+    // for all transactional + drip emails. This endpoint remains a logging
+    // mirror for subscriber analytics; setting up duplicate Resend sends
+    // here was double-emailing every signup and hurting deliverability.
+    // To re-enable, uncomment the scheduleNurtureSequence / Resend block
+    // below — but first make sure the Next.js app stops sending.
+    subscribers.set(email, {
+      source,
+      score,
+      tier,
+      date: new Date().toISOString(),
+      purchased: isPurchaseNow || existing.purchased,
+      nurtureTimers: [],
+      buyerTimers: [],
+    });
+    console.log(`[SUBSCRIBE-LOG] ${email} — ${source || 'unknown'} — tier:${tier || 'none'} — score:${score || 'n/a'} — new:${isNew} (emails handled by Next.js app)`);
 
     res.json({ success: true });
   } catch (err) {
