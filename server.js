@@ -8,11 +8,34 @@ const canvas = require('canvas');
 const tf = require('@tensorflow/tfjs-node');
 const crypto = require('crypto');
 
+// Last-resort guards — face-api / tfjs-node can throw native errors that
+// escape the per-route try/catch. We log and stay alive so one poison payload
+// does not crash-loop the container.
+process.on('uncaughtException', (err) => {
+  console.error('🛑 uncaughtException:', err && err.stack || err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('🛑 unhandledRejection:', reason && reason.stack || reason);
+});
+
 const { Canvas, Image, ImageData } = canvas;
 faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// IP block list (comma-separated env). Hits get a 403 before any parsing.
+const BLOCKED_IPS = new Set(
+  (process.env.BLOCK_IPS || '157.52.95.72')
+    .split(',').map((s) => s.trim()).filter(Boolean)
+);
+app.use((req, res, next) => {
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+  if (BLOCKED_IPS.has(ip)) {
+    return res.status(403).json({ error: 'blocked' });
+  }
+  next();
+});
 
 // Required for Railway / Render / Heroku reverse proxy — lets express-rate-limit
 // see the real client IP instead of the proxy IP, avoiding false rate-limit crashes
@@ -42,8 +65,18 @@ const limiter = rateLimit({
   legacyHeaders: false,
 });
 
-app.use('/analyze', limiter);
-app.use('/landmarks', limiter);
+// Tighter burst limiter on top of the 15-min window — prevents one IP from
+// hammering us 50x in 30 seconds while we wait for the wider window to bite.
+const burstLimiter = rateLimit({
+  windowMs: 30 * 1000,
+  max: 5,
+  message: { error: 'Slow down — too many requests in a short burst.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/analyze', burstLimiter, limiter);
+app.use('/landmarks', burstLimiter, limiter);
 
 let modelsLoaded = false;
 let requestCount = 0;
@@ -323,6 +356,14 @@ app.post('/analyze', async (req, res) => {
     const img = new Image();
     img.src = buffer;
 
+    // Reject malformed/zero-dim images BEFORE handing to face-api.
+    // canvas silently accepts garbage buffers and returns 0x0 — passing that
+    // to tfjs-node crashes the process natively (uncatchable from JS).
+    if (!img.width || !img.height || img.width < 32 || img.height < 32) {
+      console.log(`❌ Invalid image dimensions: ${img.width}x${img.height}`);
+      return res.status(400).json({ error: 'Invalid image — could not decode dimensions.' });
+    }
+
     // Resize large images to prevent OOM (same as /landmarks endpoint)
     const MAX_DIM = 800;
     let processImg = img;
@@ -482,7 +523,15 @@ app.post('/landmarks', async (req, res) => {
 
     const img = new Image();
     img.src = buffer;
-    
+
+    // Reject malformed/zero-dim images BEFORE handing to face-api.
+    // canvas silently accepts garbage buffers and returns 0x0 — passing that
+    // to tfjs-node crashes the process natively (uncatchable from JS).
+    if (!img.width || !img.height || img.width < 32 || img.height < 32) {
+      console.log(`❌ Invalid image dimensions: ${img.width}x${img.height}`);
+      return res.status(400).json({ error: 'Invalid image — could not decode dimensions.' });
+    }
+
     // Resize large images to prevent OOM and improve detection speed
     const MAX_DIM = 1024;
     let processImg = img;
