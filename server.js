@@ -187,6 +187,38 @@ function hashImage(base64Data) {
   return crypto.createHash('md5').update(base64Data).digest('hex');
 }
 
+// Brightness/contrast boost for dark photos — major no_face_detected
+// failure mode on mobile (low-light selfies). Mirrors enhanceImage()
+// in the Next.js client lib so server detection sees the same pixels.
+function enhanceServerImage(srcCanvas) {
+  const ctx = srcCanvas.getContext('2d');
+  if (!ctx) return srcCanvas;
+  const imageData = ctx.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
+  const data = imageData.data;
+
+  let totalBrightness = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    totalBrightness += (data[i] + data[i + 1] + data[i + 2]) / 3;
+  }
+  const avgBrightness = totalBrightness / (data.length / 4);
+
+  if (avgBrightness < 120) {
+    console.log(`⚡ Dark image (avg=${Math.round(avgBrightness)}), boosting brightness + contrast`);
+    const boost = avgBrightness < 60 ? 2.0 : avgBrightness < 90 ? 1.6 : 1.3;
+    const contrast = 1.2;
+    const midpoint = 128;
+    for (let i = 0; i < data.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        let val = data[i + c] * boost;
+        val = ((val - midpoint) * contrast) + midpoint;
+        data[i + c] = Math.max(0, Math.min(255, val));
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
+  return srcCanvas;
+}
+
 app.get('/count', (req, res) => {
   res.json({ count: totalCount });
 });
@@ -364,9 +396,10 @@ app.post('/analyze', async (req, res) => {
       return res.status(400).json({ error: 'Invalid image — could not decode dimensions.' });
     }
 
-    // Resize large images to prevent OOM (same as /landmarks endpoint)
+    // Resize large images to prevent OOM (same as /landmarks endpoint).
+    // Always end up on a canvas so enhanceServerImage can pixel-edit.
     const MAX_DIM = 800;
-    let processImg = img;
+    let processImg;
     if (img.width > MAX_DIM || img.height > MAX_DIM) {
       const scale = MAX_DIM / Math.max(img.width, img.height);
       const resizedCanvas = canvas.createCanvas(Math.round(img.width * scale), Math.round(img.height * scale));
@@ -374,7 +407,14 @@ app.post('/analyze', async (req, res) => {
       rCtx.drawImage(img, 0, 0, resizedCanvas.width, resizedCanvas.height);
       processImg = resizedCanvas;
       console.log(`📐 Resized ${img.width}x${img.height} → ${resizedCanvas.width}x${resizedCanvas.height}`);
+    } else {
+      const wrapCanvas = canvas.createCanvas(img.width, img.height);
+      wrapCanvas.getContext('2d').drawImage(img, 0, 0);
+      processImg = wrapCanvas;
     }
+
+    // Brightness/contrast boost for dark photos before detection
+    processImg = enhanceServerImage(processImg);
 
     console.log('🔍 Detecting faces...');
 
@@ -386,7 +426,10 @@ app.post('/analyze', async (req, res) => {
     ];
 
     let detections = null;
-    for (const cfg of configs) {
+    let hitCfg = configs[0];
+    let hitAttempt = 0;
+    for (let i = 0; i < configs.length; i++) {
+      const cfg = configs[i];
       try {
         const result = await faceapi
           .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions(cfg))
@@ -394,6 +437,8 @@ app.post('/analyze', async (req, res) => {
           .withFaceExpressions();
         if (result && result.length > 0) {
           detections = result;
+          hitCfg = cfg;
+          hitAttempt = i + 1;
           console.log(`✅ Found ${result.length} face(s) with inputSize=${cfg.inputSize}, threshold=${cfg.scoreThreshold}`);
           break;
         }
@@ -459,11 +504,16 @@ app.post('/analyze', async (req, res) => {
       };
     });
     
-    const result = { people };
-    
+    const result = {
+      people,
+      hitInputSize: hitCfg.inputSize,
+      hitThreshold: hitCfg.scoreThreshold,
+      hitAttempt,
+    };
+
     totalCount += people.length;
     console.log(`📊 Total count: ${totalCount}`);
-    
+
     cache.set(imageHash, result);
     console.log(`💾 Cached result`);
     
@@ -532,35 +582,56 @@ app.post('/landmarks', async (req, res) => {
       return res.status(400).json({ error: 'Invalid image — could not decode dimensions.' });
     }
 
-    // Resize large images to prevent OOM and improve detection speed
+    // Resize large images to prevent OOM and improve detection speed.
+    // Always end on canvas so enhanceServerImage can pixel-edit.
     const MAX_DIM = 1024;
-    let processImg = img;
+    let processImg;
+    let wasResized = false;
     if (img.width > MAX_DIM || img.height > MAX_DIM) {
       const scale = MAX_DIM / Math.max(img.width, img.height);
       const resizedCanvas = canvas.createCanvas(Math.round(img.width * scale), Math.round(img.height * scale));
       const rCtx = resizedCanvas.getContext('2d');
       rCtx.drawImage(img, 0, 0, resizedCanvas.width, resizedCanvas.height);
       processImg = resizedCanvas;
+      wasResized = true;
       console.log(`📐 Resized ${img.width}x${img.height} → ${resizedCanvas.width}x${resizedCanvas.height}`);
+    } else {
+      const wrapCanvas = canvas.createCanvas(img.width, img.height);
+      wrapCanvas.getContext('2d').drawImage(img, 0, 0);
+      processImg = wrapCanvas;
     }
 
-    // Try with larger inputSize first for better accuracy, fall back to smaller
-    let detections = await faceapi
-      .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions({
-        inputSize: 512,
-        scoreThreshold: 0.2
-      }))
-      .withFaceLandmarks();
+    // Brightness/contrast boost for dark photos before detection
+    processImg = enhanceServerImage(processImg);
 
-    // Retry with even lower threshold if no face found
-    if (!detections || detections.length === 0) {
-      console.log('⚠️  Retrying with lower threshold...');
-      detections = await faceapi
-        .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions({
-          inputSize: 320,
-          scoreThreshold: 0.1
-        }))
-        .withFaceLandmarks();
+    // Detection cascade — match /analyze. Was 2-config (512@0.2 → 320@0.1);
+    // adds 224@0.1 micro-face fallback so /audit + 17 mobile surfaces
+    // catch faces /looksmaxxing-test was already catching.
+    const configs = [
+      { inputSize: 320, scoreThreshold: 0.15 },
+      { inputSize: 512, scoreThreshold: 0.15 },
+      { inputSize: 224, scoreThreshold: 0.1 },
+    ];
+
+    let detections = null;
+    let hitCfg = configs[0];
+    let hitAttempt = 0;
+    for (let i = 0; i < configs.length; i++) {
+      const cfg = configs[i];
+      try {
+        const result = await faceapi
+          .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions(cfg))
+          .withFaceLandmarks();
+        if (result && result.length > 0) {
+          detections = result;
+          hitCfg = cfg;
+          hitAttempt = i + 1;
+          console.log(`✅ Landmarks hit: inputSize=${cfg.inputSize}, threshold=${cfg.scoreThreshold}, found: ${result.length}`);
+          break;
+        }
+      } catch (e) {
+        console.warn(`⚠️ Landmarks failed with inputSize=${cfg.inputSize}:`, e.message);
+      }
     }
 
     const processingTime = Date.now() - startTime;
@@ -577,7 +648,7 @@ app.post('/landmarks', async (req, res) => {
     )[0];
 
     // Return raw 68-point landmarks — scale back to original image coordinates if resized
-    const scaleBack = (processImg !== img) ? Math.max(img.width, img.height) / MAX_DIM : 1;
+    const scaleBack = wasResized ? Math.max(img.width, img.height) / MAX_DIM : 1;
     const positions = detection.landmarks.positions.map(p => ({
       x: Math.round(((p.x || p._x) * scaleBack) * 10) / 10,
       y: Math.round(((p.y || p._y) * scaleBack) * 10) / 10
@@ -588,6 +659,9 @@ app.post('/landmarks', async (req, res) => {
       imageWidth: img.width,
       imageHeight: img.height,
       confidence: detection.detection.score,
+      hitInputSize: hitCfg.inputSize,
+      hitThreshold: hitCfg.scoreThreshold,
+      hitAttempt,
       processingTime
     };
 
