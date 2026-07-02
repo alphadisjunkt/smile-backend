@@ -444,10 +444,28 @@ app.post('/analyze', async (req, res) => {
     for (let i = 0; i < configs.length; i++) {
       const cfg = configs[i];
       try {
-        const result = await faceapi
-          .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions(cfg))
-          .withFaceLandmarks()
-          .withFaceExpressions();
+        // 2026-07-02 — descriptor added fail-safe (same pattern as /landmarks):
+        // if the descriptor stage throws, retry landmarks+expressions only so
+        // a descriptor problem can never fail a detectable face.
+        let result = null;
+        if (recognitionLoaded) {
+          try {
+            result = await faceapi
+              .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions(cfg))
+              .withFaceLandmarks()
+              .withFaceExpressions()
+              .withFaceDescriptors();
+          } catch (descErr) {
+            console.warn(`⚠️ /analyze descriptor stage failed (inputSize=${cfg.inputSize}) — retrying without:`, descErr.message);
+            result = null;
+          }
+        }
+        if (!result) {
+          result = await faceapi
+            .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions(cfg))
+            .withFaceLandmarks()
+            .withFaceExpressions();
+        }
         if (result && result.length > 0) {
           detections = result;
           hitCfg = cfg;
@@ -498,10 +516,24 @@ app.post('/analyze', async (req, res) => {
         ? finalScore >= 75 ? "Genuine Joy! 😄" : "Real Smile 😊"
         : finalScore >= 35 ? "Polite Smile 😐" : "Fake Smile! 😬";
       
+      // 2026-07-02 — landmarks scaled back to the SUBMITTED image's coordinate
+      // space (matches what the desktop client-side path produces, so mobile
+      // and desktop callers get identical shapes). This also FIXES the mobile
+      // audit-intake dead end: app/account/audit-upload requires
+      // person.landmarks, which /analyze never returned — every mobile audit
+      // photo errored "Landmark detection failed".
+      const lmScale = processImg.width > 0 ? img.width / processImg.width : 1;
       return {
         score: finalScore,
         isGenuine,
         verdict,
+        landmarks: landmarks.positions.map(p => ({
+          x: Math.round(((p.x ?? p._x) * lmScale) * 10) / 10,
+          y: Math.round(((p.y ?? p._y) * lmScale) * 10) / 10,
+        })),
+        // 128-d appearance descriptor (aligned-crop, scale-invariant) — feeds
+        // the validated impression score. null when recognition disabled.
+        descriptor: detection.descriptor ? Array.from(detection.descriptor) : null,
         metrics: {
           eyeConstriction,
           cheekRaise,
