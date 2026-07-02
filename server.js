@@ -43,7 +43,26 @@ app.set('trust proxy', 1);
 
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 120 });
 
-let totalCount = 0;
+// ── Analysis counter (seeded + persisted) ───────────────────────────────
+// Previously `let totalCount = 0` lived only in memory: every DEPLOY reset
+// it to zero, nuking the site's "N analyzed" social-proof counter
+// (2026-07-02: hero showed ~53 after a redeploy; the real accumulated
+// count was ~35.9k). Now: boot floor = COUNT_SEED env (set on Railway,
+// falls back to the last known real value) raised by any persisted file
+// value (survives restarts; the seed covers deploys).
+const fsCounter = require('fs');
+const COUNT_FILE = './analysis-count.json';
+const COUNT_SEED = parseInt(process.env.COUNT_SEED || '35920', 10);
+let totalCount = COUNT_SEED;
+try {
+  if (fsCounter.existsSync(COUNT_FILE)) {
+    const saved = JSON.parse(fsCounter.readFileSync(COUNT_FILE, 'utf8'));
+    if (Number.isFinite(saved.count)) totalCount = Math.max(totalCount, saved.count);
+  }
+} catch (e) { console.error('count file load failed (using seed):', e.message); }
+function persistCount() {
+  try { fsCounter.writeFileSync(COUNT_FILE, JSON.stringify({ count: totalCount })); } catch { /* non-fatal */ }
+}
 
 app.use(cors({
   origin: '*',
@@ -238,6 +257,7 @@ app.get('/count', (req, res) => {
 
 app.post('/count/increment', (req, res) => {
   totalCount++;
+  persistCount();
   console.log(`📊 Count incremented to: ${totalCount}`);
   res.json({ count: totalCount, success: true });
 });
