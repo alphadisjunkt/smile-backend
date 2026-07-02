@@ -119,16 +119,23 @@ async function loadModels() {
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
       faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
     ]);
-    // 2026-07-02 — recognition net powers the 128-d face descriptor that
-    // /landmarks now returns (feeds the trained impression score in the app).
-    // Loaded NON-FATALLY: scans (mobile = ~78% of traffic = top of every paid
-    // funnel) must never break because the descriptor feature can't load.
-    try {
-      await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-      recognitionLoaded = true;
-      console.log('✅ Recognition net loaded (descriptors enabled)');
-    } catch (recErr) {
-      console.error('⚠️ Recognition net failed to load — descriptors disabled, scans unaffected:', recErr.message);
+    // 2026-07-02 — recognition net powers the 128-d face descriptor
+    // (impression score). OPT-IN via RECOGNITION_ENABLED=1: the 4th model
+    // pushed the 450MB heap (railway.json --max-old-space-size=450) into
+    // OOM crash-loops on 2026-07-02 — Railway exhausted its 10 restart
+    // retries and STOPPED the service (mobile scans down). Default OFF =
+    // the 3-model memory envelope that ran stably for months. Re-enable
+    // only after raising the instance memory + heap cap.
+    if (process.env.RECOGNITION_ENABLED === '1') {
+      try {
+        await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+        recognitionLoaded = true;
+        console.log('✅ Recognition net loaded (descriptors enabled)');
+      } catch (recErr) {
+        console.error('⚠️ Recognition net failed to load — descriptors disabled, scans unaffected:', recErr.message);
+      }
+    } else {
+      console.log('ℹ️ Recognition net disabled (set RECOGNITION_ENABLED=1 after raising memory) — descriptors off, scans unaffected');
     }
     
     modelsLoaded = true;
