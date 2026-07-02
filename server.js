@@ -79,6 +79,8 @@ app.use('/analyze', burstLimiter, limiter);
 app.use('/landmarks', burstLimiter, limiter);
 
 let modelsLoaded = false;
+// Descriptor feature flag — true only if faceRecognitionNet loaded (non-fatal).
+let recognitionLoaded = false;
 let requestCount = 0;
 let cacheHits = 0;
 let totalProcessingTime = 0;
@@ -98,6 +100,17 @@ async function loadModels() {
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
       faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
     ]);
+    // 2026-07-02 — recognition net powers the 128-d face descriptor that
+    // /landmarks now returns (feeds the trained impression score in the app).
+    // Loaded NON-FATALLY: scans (mobile = ~78% of traffic = top of every paid
+    // funnel) must never break because the descriptor feature can't load.
+    try {
+      await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+      recognitionLoaded = true;
+      console.log('✅ Recognition net loaded (descriptors enabled)');
+    } catch (recErr) {
+      console.error('⚠️ Recognition net failed to load — descriptors disabled, scans unaffected:', recErr.message);
+    }
     
     modelsLoaded = true;
     console.log('✅ Models loaded successfully');
@@ -619,9 +632,28 @@ app.post('/landmarks', async (req, res) => {
     for (let i = 0; i < configs.length; i++) {
       const cfg = configs[i];
       try {
-        const result = await faceapi
-          .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions(cfg))
-          .withFaceLandmarks();
+        // 128-d appearance descriptor per face (~50ms on tfjs-node; only on
+        // the successful attempt — failed attempts have no faces). FAIL-SAFE:
+        // if the descriptor stage throws, retry the SAME config landmarks-only
+        // so the scan still succeeds — a descriptor problem must never turn a
+        // detectable face into "No face detected" (fulfillment depends on it).
+        let result = null;
+        if (recognitionLoaded) {
+          try {
+            result = await faceapi
+              .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions(cfg))
+              .withFaceLandmarks()
+              .withFaceDescriptors();
+          } catch (descErr) {
+            console.warn(`⚠️ Descriptor stage failed (inputSize=${cfg.inputSize}) — retrying landmarks-only:`, descErr.message);
+            result = null;
+          }
+        }
+        if (!result) {
+          result = await faceapi
+            .detectAllFaces(processImg, new faceapi.TinyFaceDetectorOptions(cfg))
+            .withFaceLandmarks();
+        }
         if (result && result.length > 0) {
           detections = result;
           hitCfg = cfg;
@@ -656,6 +688,10 @@ app.post('/landmarks', async (req, res) => {
 
     const result = {
       landmarks: positions,
+      // 128-d face descriptor (Float32Array → plain array, ~2.5KB). Additive
+      // field — existing clients ignore it. Descriptors are scale-invariant
+      // (computed on the aligned face crop) so no scaleBack needed.
+      descriptor: detection.descriptor ? Array.from(detection.descriptor) : null,
       imageWidth: img.width,
       imageHeight: img.height,
       confidence: detection.detection.score,
