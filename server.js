@@ -120,13 +120,12 @@ async function loadModels() {
       faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
     ]);
     // 2026-07-02 — recognition net powers the 128-d face descriptor
-    // (impression score). OPT-IN via RECOGNITION_ENABLED=1: the 4th model
-    // pushed the 450MB heap (railway.json --max-old-space-size=450) into
-    // OOM crash-loops on 2026-07-02 — Railway exhausted its 10 restart
-    // retries and STOPPED the service (mobile scans down). Default OFF =
-    // the 3-model memory envelope that ran stably for months. Re-enable
-    // only after raising the instance memory + heap cap.
-    if (process.env.RECOGNITION_ENABLED === '1') {
+    // (impression score). Default ON with RECOGNITION_DISABLED=1 as the
+    // kill switch. (The Jul-2 outage was Railway's US-East fiber incident
+    // TAW34N30, NOT an OOM from this model — the 4-model setup served
+    // stably for ~2h before the network cut. If memory pressure ever does
+    // appear at the 450MB heap cap, set RECOGNITION_DISABLED=1.)
+    if (process.env.RECOGNITION_DISABLED !== '1') {
       try {
         await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
         recognitionLoaded = true;
