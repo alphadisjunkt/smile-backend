@@ -100,6 +100,7 @@ app.use('/landmarks', burstLimiter, limiter);
 let modelsLoaded = false;
 // Descriptor feature flag — true only if faceRecognitionNet loaded (non-fatal).
 let recognitionLoaded = false;
+let ageLoaded = false;
 let requestCount = 0;
 let cacheHits = 0;
 let totalProcessingTime = 0;
@@ -135,6 +136,18 @@ async function loadModels() {
       }
     } else {
       console.log('ℹ️ Recognition net disabled (set RECOGNITION_ENABLED=1 after raising memory) — descriptors off, scans unaffected');
+    }
+    // 2026-07-09 — AgeGenderNet (420KB quantized) powers the perceived-age
+    // read ("you read as N in this photo"). Non-fatal + kill switch
+    // AGE_DISABLED=1; failure never touches landmarks/descriptors.
+    if (process.env.AGE_DISABLED !== '1') {
+      try {
+        await faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL);
+        ageLoaded = true;
+        console.log('✅ AgeGender net loaded (perceived age enabled)');
+      } catch (ageErr) {
+        console.error('⚠️ AgeGender net failed to load — age disabled, scans unaffected:', ageErr.message);
+      }
     }
     
     modelsLoaded = true;
@@ -744,8 +757,33 @@ app.post('/landmarks', async (req, res) => {
       y: Math.round(((p.y || p._y) * scaleBack) * 10) / 10
     }));
 
+    // 2026-07-09 — perceived age: isolated pass on the picked face's crop.
+    // Fully additive + fail-safe: any error → age null, scan unaffected.
+    let perceivedAge = null;
+    if (ageLoaded) {
+      try {
+        const box = detection.detection.box;
+        const pad = Math.round(Math.max(box.width, box.height) * 0.2);
+        const cx = Math.max(0, Math.round(box.x) - pad);
+        const cy = Math.max(0, Math.round(box.y) - pad);
+        const cw = Math.min(processImg.width - cx, Math.round(box.width) + pad * 2);
+        const ch = Math.min(processImg.height - cy, Math.round(box.height) + pad * 2);
+        if (cw > 32 && ch > 32) {
+          const cropCanvas = canvas.createCanvas(cw, ch);
+          cropCanvas.getContext('2d').drawImage(processImg, cx, cy, cw, ch, 0, 0, cw, ch);
+          const ag = await faceapi.nets.ageGenderNet.predictAgeAndGender(cropCanvas);
+          if (ag && Number.isFinite(ag.age)) perceivedAge = Math.round(ag.age * 10) / 10;
+        }
+      } catch (ageErr) {
+        console.warn('⚠️ Age pass failed (scan unaffected):', ageErr.message);
+      }
+    }
+
     const result = {
       landmarks: positions,
+      // Perceived age in THIS photo (AgeGenderNet, MAE ~4-5yrs). Additive
+      // field — existing clients ignore it. null when net off/failed.
+      age: perceivedAge,
       // 128-d face descriptor (Float32Array → plain array, ~2.5KB). Additive
       // field — existing clients ignore it. Descriptors are scale-invariant
       // (computed on the aligned face crop) so no scaleBack needed.
