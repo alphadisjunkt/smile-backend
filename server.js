@@ -112,7 +112,10 @@ async function loadModels() {
   }
   
   console.log('Loading AI models...');
-  const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+  // 2026-07-21 accuracy S1 — weights PINNED (was floating latest: a jsdelivr
+  // publish could fork server vs client scores with zero deploy). Bump in
+  // lockstep with the client repo's 10 pinned sites, never alone.
+  const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model';
   
   try {
     await Promise.all([
@@ -450,7 +453,10 @@ app.post('/analyze', async (req, res) => {
 
     // Resize large images to prevent OOM (same as /landmarks endpoint).
     // Always end up on a canvas so enhanceServerImage can pixel-edit.
-    const MAX_DIM = 800;
+    // 2026-07-21 accuracy S2 — was 800 (a silent quality tax vs desktop's 1280).
+    // 1024 now; 1280 follow-up AFTER a day of memory watch (450MB heap cap was
+    // set after the 6d0ae0c OOM crash-loop — don't triple pixel throughput blind).
+    const MAX_DIM = 1024;
     let processImg;
     if (img.width > MAX_DIM || img.height > MAX_DIM) {
       const scale = MAX_DIM / Math.max(img.width, img.height);

@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@tensorflow/tfjs-node": "4.11.0",
-    "@vladmandic/face-api": "1.7.12",
+    "@vladmandic/face-api": "1.7.15",
     "canvas": "2.11.2",
     "cors": "2.8.5",
     "dotenv": "^17.3.1",
