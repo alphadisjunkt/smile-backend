@@ -76,9 +76,14 @@ app.options('*', cors());
 // Body parser — reduced from 25mb to 5mb to prevent OOM on small Railway instances
 app.use(express.json({ limit: "5mb" }));
 
+// 2026-07-22 — raised 50→200: the 1-scan→account gate 16x'd signups and
+// mobile carriers CGNAT many users behind one IP, so a shared-IP window of
+// 50/15min was being exhausted by NEIGHBORS, not abusers. 200/15min still
+// caps a single IP at ~13 scans/min sustained — far above any legit device,
+// low enough to blunt scripted abuse.
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 50,
+  max: 200,
   message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -86,9 +91,14 @@ const limiter = rateLimit({
 
 // Tighter burst limiter on top of the 15-min window — prevents one IP from
 // hammering us 50x in 30 seconds while we wait for the wider window to bite.
+// 2026-07-22 — raised 5→20: the legit product EXCEEDS 5/30s by design
+// (3-shot consensus = 3 rapid /landmarks calls; + a retake + CGNAT
+// neighbors sharing the IP). Users were seeing "Analysis timed out" that
+// was actually a 429 from this limiter. 20/30s per IP tolerates ~4-6
+// concurrent users behind one carrier NAT running consensus.
 const burstLimiter = rateLimit({
   windowMs: 30 * 1000,
-  max: 5,
+  max: 20,
   message: { error: 'Slow down — too many requests in a short burst.' },
   standardHeaders: true,
   legacyHeaders: false,
