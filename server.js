@@ -7,6 +7,7 @@ const faceapi = require('@vladmandic/face-api');
 const canvas = require('canvas');
 const tf = require('@tensorflow/tfjs-node');
 const crypto = require('crypto');
+const { decodeRequestImage, MAX_SIDE, MAX_PIXELS } = require('./image-input');
 
 // Last-resort guards — face-api / tfjs-node can throw native errors that
 // escape the per-route try/catch. We log and stay alive so one poison payload
@@ -115,7 +116,7 @@ let requestCount = 0;
 let cacheHits = 0;
 let totalProcessingTime = 0;
 
-async function loadModels() {
+async function initializeModels() {
   if (modelsLoaded) {
     console.log('Models already loaded');
     return;
@@ -169,6 +170,16 @@ async function loadModels() {
     console.error('❌ Failed to load models:', error);
     throw error;
   }
+}
+
+// Share startup/retry work: simultaneous requests must not load each net again.
+let modelLoadPromise = null;
+function loadModels() {
+  if (modelsLoaded) return Promise.resolve();
+  if (!modelLoadPromise) {
+    modelLoadPromise = initializeModels().finally(() => { modelLoadPromise = null; });
+  }
+  return modelLoadPromise;
 }
 
 function calculateEyeConstriction(landmarks) {
@@ -377,16 +388,7 @@ app.post('/analyze', async (req, res) => {
   console.log(`📸 Analysis request #${requestCount} from ${req.ip}`);
   
   try {
-    const { image } = req.body;
-    
-    if (!image) {
-      console.log('❌ No image in request body');
-      return res.status(400).json({ error: 'No image provided' });
-    }
-    
-    console.log(`📊 Image size: ${Math.round(image.length / 1024)}KB`);
-    
-    const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
+    const { base64Data, buffer } = decodeRequestImage(req.body?.image, 3 * 1024 * 1024);
     const imageHash = hashImage(base64Data);
     const cachedResult = cache.get(imageHash);
     
@@ -400,21 +402,14 @@ app.post('/analyze', async (req, res) => {
     await loadModels();
     
     console.log('🖼️  Processing image...');
-    const buffer = Buffer.from(base64Data, 'base64');
-
-    // Cap image size to prevent OOM — reject if decoded buffer > 3MB
-    if (buffer.length > 3 * 1024 * 1024) {
-      console.log(`❌ Image too large: ${Math.round(buffer.length / 1024)}KB`);
-      return res.status(400).json({ error: 'Image too large. Please resize to under 1200px.' });
-    }
-
     const img = new Image();
     img.src = buffer;
 
     // Reject malformed/zero-dim images BEFORE handing to face-api.
     // canvas silently accepts garbage buffers and returns 0x0 — passing that
     // to tfjs-node crashes the process natively (uncatchable from JS).
-    if (!img.width || !img.height || img.width < 32 || img.height < 32) {
+    if (!img.width || !img.height || img.width < 32 || img.height < 32 ||
+        img.width > MAX_SIDE || img.height > MAX_SIDE || img.width * img.height > MAX_PIXELS) {
       console.log(`❌ Invalid image dimensions: ${img.width}x${img.height}`);
       return res.status(400).json({ error: 'Invalid image — could not decode dimensions.' });
     }
@@ -584,7 +579,7 @@ app.post('/analyze', async (req, res) => {
     const processingTime = Date.now() - startTime;
     console.error(`❌ Analysis error after ${processingTime}ms:`, error);
     if (global.gc) { try { global.gc() } catch {} }
-    res.status(500).json({
+    res.status(error.statusCode === 400 || error.statusCode === 413 ? error.statusCode : 500).json({
       error: 'Analysis failed',
       message: error.message
     });
@@ -602,15 +597,7 @@ app.post('/landmarks', async (req, res) => {
   console.log(`🔬 Landmarks request #${requestCount} from ${req.ip}`);
   
   try {
-    const { image } = req.body;
-    
-    if (!image) {
-      return res.status(400).json({ error: 'No image provided' });
-    }
-    
-    console.log(`📊 Image size: ${Math.round(image.length / 1024)}KB`);
-    
-    const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
+    const { base64Data, buffer } = decodeRequestImage(req.body?.image, 5 * 1024 * 1024);
     const imageHash = 'lm_' + hashImage(base64Data);
     const cachedResult = cache.get(imageHash);
     
@@ -622,20 +609,14 @@ app.post('/landmarks', async (req, res) => {
     
     await loadModels();
 
-    const buffer = Buffer.from(base64Data, 'base64');
-
-    // Reject images over 5MB to prevent OOM crashes
-    if (buffer.length > 5 * 1024 * 1024) {
-      return res.status(400).json({ error: 'Image too large. Please resize to under 5MB.' });
-    }
-
     const img = new Image();
     img.src = buffer;
 
     // Reject malformed/zero-dim images BEFORE handing to face-api.
     // canvas silently accepts garbage buffers and returns 0x0 — passing that
     // to tfjs-node crashes the process natively (uncatchable from JS).
-    if (!img.width || !img.height || img.width < 32 || img.height < 32) {
+    if (!img.width || !img.height || img.width < 32 || img.height < 32 ||
+        img.width > MAX_SIDE || img.height > MAX_SIDE || img.width * img.height > MAX_PIXELS) {
       console.log(`❌ Invalid image dimensions: ${img.width}x${img.height}`);
       return res.status(400).json({ error: 'Invalid image — could not decode dimensions.' });
     }
@@ -779,7 +760,7 @@ app.post('/landmarks', async (req, res) => {
     
   } catch (error) {
     console.error(`❌ Landmarks error:`, error);
-    res.status(500).json({ error: 'Landmarks extraction failed', message: error.message });
+    res.status(error.statusCode === 400 || error.statusCode === 413 ? error.statusCode : 500).json({ error: 'Landmarks extraction failed', message: error.message });
   }
 });
 
@@ -1271,7 +1252,7 @@ app.post('/widget-key-provision', requireWidgetService, (req, res) => {
 });
 
 // PATCH /widget-theme — update theme for a key
-app.patch('/widget-theme', (req, res) => {
+app.patch('/widget-theme', requireWidgetService, (req, res) => {
   const { key, theme } = req.body || {};
   if (!key || !widgetKeys.has(key)) return res.status(404).json({ error: 'Invalid key' });
   const data = widgetKeys.get(key);
@@ -1287,21 +1268,27 @@ app.get('/widget-usage', (req, res) => {
   const { key } = req.query;
   if (!key || !widgetKeys.has(key)) return res.status(404).json({ error: 'Invalid key' });
   const data = widgetKeys.get(key);
-  res.json({ key: key.slice(0, 16) + '...', active: data.active, createdAt: data.createdAt, email: data.email });
+  res.json({ key: key.slice(0, 16) + '...', active: data.active, createdAt: data.createdAt });
 });
 
 // POST /widget-recover — send key to email (no accounts needed)
-app.post('/widget-recover', async (req, res) => {
-  const { email } = req.body || {};
-  if (!email || !email.includes('@')) return res.status(400).json({ error: 'Invalid email' });
+const widgetRecoveryLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 3, standardHeaders: true, legacyHeaders: false });
+app.post('/widget-recover', widgetRecoveryLimiter, async (req, res) => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Invalid email' });
 
   const resendKey = process.env.RESEND_API_KEY;
   if (!resendKey) return res.status(500).json({ error: 'Email not configured' });
 
+  // Uniform recipient cooldown also bounds callers rotating source IPs.
+  const recoveryBucket = 'widget-recovery:' + crypto.createHash('sha256').update(email).digest('hex');
+  if (cache.get(recoveryBucket)) return res.json({ success: true });
+  cache.set(recoveryBucket, true, 600);
+
   // Find key by email
   let found = null;
   for (const [key, data] of widgetKeys.entries()) {
-    if (data.email === email && data.active) { found = key; break; }
+    if (typeof data.email === 'string' && data.email.trim().toLowerCase() === email && data.active) { found = key; break; }
   }
 
   // Always respond success to prevent email enumeration
