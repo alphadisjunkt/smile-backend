@@ -294,56 +294,14 @@ app.post('/count/increment', (req, res) => {
   res.json({ count: totalCount, success: true });
 });
 
-// ── Scan History (progress tracking) ──────────────────────────────────────────
+// Retired legacy history API. Account-owned history lives in the Next.js app.
+// Never trust caller-supplied user IDs to read or write personal scan records.
 const fs = require('fs');
-const SCAN_HISTORY_FILE = './scan-history.json';
-const scanHistory = new Map();
-
-// Load persisted scan history
-try {
-  if (fs.existsSync(SCAN_HISTORY_FILE)) {
-    const data = JSON.parse(fs.readFileSync(SCAN_HISTORY_FILE, 'utf8'));
-    Object.entries(data).forEach(([k, v]) => scanHistory.set(k, v));
-    console.log(`📋 Loaded ${scanHistory.size} scan histories`);
-  }
-} catch (e) { console.error('Failed to load scan history:', e.message); }
-
-function persistScanHistory() {
-  try {
-    const obj = Object.fromEntries(scanHistory);
-    fs.writeFileSync(SCAN_HISTORY_FILE, JSON.stringify(obj));
-  } catch (e) { console.error('Failed to persist scan history:', e.message); }
+function retiredEndpoint(req, res) {
+  return res.status(410).json({ error: 'This legacy endpoint is no longer available.' });
 }
-
-// Save a scan result
-app.post('/scan-history', (req, res) => {
-  const { userId, score, tier, strengths, improvements, metrics } = req.body;
-  if (!userId || typeof score !== 'number') {
-    return res.status(400).json({ error: 'userId and score required' });
-  }
-  const existing = scanHistory.get(userId) || [];
-  const record = {
-    date: new Date().toISOString(),
-    score: Math.round(score),
-    tier: tier || 'unknown',
-    topStrength: (strengths || [])[0] || '',
-    topImprovement: (improvements || [])[0] || '',
-    categoryScores: metrics || null,
-  };
-  // Keep max 50 scans per user
-  existing.push(record);
-  if (existing.length > 50) existing.splice(0, existing.length - 50);
-  scanHistory.set(userId, existing);
-  persistScanHistory();
-  console.log(`📋 Saved scan for ${userId}: score=${score}, total=${existing.length}`);
-  res.json({ success: true, totalScans: existing.length, record });
-});
-
-// Get scan history for a user
-app.get('/scan-history/:userId', (req, res) => {
-  const history = scanHistory.get(req.params.userId) || [];
-  res.json({ userId: req.params.userId, scans: history, totalScans: history.length });
-});
+app.post('/scan-history', retiredEndpoint);
+app.get('/scan-history/:userId', retiredEndpoint);
 
 // ── Referral Program ─────────────────────────────────────────────────────────
 const REFERRAL_FILE = './referral-data.json';
@@ -1175,47 +1133,9 @@ function buildLeadEmail(score) {
 const KEYS_FILE = './widget-keys.json';
 const widgetKeys = new Map(); // key → { customerId, sessionId, subscriptionId, active, theme, email, createdAt }
 
-// Schedule 30-day re-scan reminder
-app.post('/schedule-rescan-reminder', async (req, res) => {
-  const { email, score, date } = req.body;
-  if (!email) return res.status(400).json({ error: 'email required' });
-
-  const resendKey = process.env.RESEND_API_KEY;
-  if (!resendKey) return res.json({ success: false, reason: 'no email config' });
-
-  // Schedule for 30 days from now
-  const reminderDate = new Date(date || Date.now());
-  reminderDate.setDate(reminderDate.getDate() + 30);
-
-  const delay = reminderDate.getTime() - Date.now();
-  if (delay > 0 && delay < 45 * 24 * 60 * 60 * 1000) { // max 45 days
-    setTimeout(async () => {
-      try {
-        const { Resend } = require('resend');
-        const resend = new Resend(resendKey);
-        await resend.emails.send({
-          from: 'RealSmile <noreply@realsmile.online>',
-          to: email,
-          subject: `Your face score was ${score}/100 — time to re-scan`,
-          html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
-            <h2 style="margin:0 0 8px">Time to re-scan</h2>
-            <p style="color:#666;font-size:14px">30 days ago you scored <strong>${score}/100</strong> on your looksmax test. Have your metrics improved?</p>
-            <p style="color:#666;font-size:14px">Retake the test to track your progress — it's free.</p>
-            <a href="https://realsmile.online/looksmaxxing-test?utm_source=rescan&utm_medium=email" style="display:inline-block;background:#000;color:#fff;padding:12px 24px;border-radius:999px;text-decoration:none;font-weight:600;font-size:14px;margin-top:16px">Re-scan My Face →</a>
-            <p style="color:#999;font-size:11px;margin-top:24px">realsmile.online · <a href="https://realsmile.online/unsubscribe?email=${encodeURIComponent(email)}" style="color:#999">Unsubscribe</a></p>
-          </div>`,
-        });
-        console.log('[RESCAN REMINDER] Sent to', email);
-      } catch (err) {
-        console.error('[RESCAN REMINDER ERROR]', err.message);
-      }
-    }, delay);
-
-    console.log(`[RESCAN] Scheduled reminder for ${email} in ${Math.round(delay / 86400000)} days`);
-  }
-
-  res.json({ success: true, reminderDate: reminderDate.toISOString() });
-});
+// Scheduling and suppression are owned by Next.js. A 30-day setTimeout also
+// overflows Node's timer limit; this public legacy sender must stay retired.
+app.post('/schedule-rescan-reminder', retiredEndpoint);
 
 // Load persisted keys on startup
 try {
@@ -1279,6 +1199,11 @@ app.post('/widget-subscribe', async (req, res) => {
 // GET /widget-auth?key=xxx — validate key and return theme + customer info
 app.get('/widget-auth', (req, res) => {
   const { key, full } = req.query;
+  if (full === '1') {
+    let allowed = false;
+    requireWidgetService(req, res, () => { allowed = true; });
+    if (!allowed) return;
+  }
   if (!key) return res.json({ valid: false });
 
   const cacheHit = cache.get(`wk:${key}:${full || ''}`);
@@ -1299,11 +1224,28 @@ app.get('/widget-auth', (req, res) => {
   res.json(result);
 });
 
+// Only a trusted server may provision keys or request owner details.
+// Configure the same WIDGET_PROVISION_SECRET on the backend and Next.js.
+function requireWidgetService(req, res, next) {
+  const expected = process.env.WIDGET_PROVISION_SECRET || '';
+  const auth = req.headers.authorization || '';
+  const supplied = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const want = Buffer.from(expected);
+  const have = Buffer.from(supplied);
+  if (!expected || want.length !== have.length || !crypto.timingSafeEqual(want, have)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  next();
+}
+
 // POST /widget-key-provision — called by Next.js after Stripe verification
 // Stripe verification happens in Next.js (has the secret key); backend just handles storage
-app.post('/widget-key-provision', (req, res) => {
+app.post('/widget-key-provision', requireWidgetService, (req, res) => {
   const { sessionId, customerId, subscriptionId, email } = req.body || {};
-  if (!sessionId) return res.status(400).json({ error: 'missing sessionId' });
+  if (typeof sessionId !== 'string' || !sessionId.startsWith('cs_') || sessionId.length > 255 ||
+      typeof customerId !== 'string' || !customerId.startsWith('cus_') || customerId.length > 255) {
+    return res.status(400).json({ error: 'verified sessionId and customerId required' });
+  }
 
   // Return existing key for this session
   for (const [key, data] of widgetKeys.entries()) {
@@ -1334,7 +1276,8 @@ app.patch('/widget-theme', (req, res) => {
   if (!key || !widgetKeys.has(key)) return res.status(404).json({ error: 'Invalid key' });
   const data = widgetKeys.get(key);
   widgetKeys.set(key, { ...data, theme: { ...data.theme, ...theme } });
-  cache.del(`wk:${key}`); // invalidate cache
+  cache.del(`wk:${key}:`);
+  cache.del(`wk:${key}:1`);
   saveWidgetKeys();
   res.json({ success: true });
 });
