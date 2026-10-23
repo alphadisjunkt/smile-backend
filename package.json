@@ -4,7 +4,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node scripts/qa-audit-regressions.cjs"
+    "test": "node scripts/qa-audit-regressions.cjs && node scripts/qa-inference-gate.cjs"
   },
   "dependencies": {
     "@tensorflow/tfjs-node": "4.11.0",

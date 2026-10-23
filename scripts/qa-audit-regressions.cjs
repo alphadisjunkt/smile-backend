@@ -21,15 +21,25 @@ async function backendTests(file){
  class Cache{constructor(){this.rows=new Map()}get(k){return this.rows.get(k)}set(k,v){this.rows.set(k,v)}del(k){this.rows.delete(k)}}
  const limiter=options=>{limitOptions.push(options);const counts=new Map();return(req,res,next)=>{const n=(counts.get(req.ip)||0)+1;counts.set(req.ip,n);return n>options.max?res.status(429).json({error:'limited'}):next()}};
  class Image{set src(value){nativeDecodes++}get width(){return 0}get height(){return 0}}
- const modules={dotenv:{config(){}},express:Object.assign(()=>app,{json:()=>()=>{}}),cors:()=>()=>{},'express-rate-limit':limiter,'node-cache':Cache,'@vladmandic/face-api':api,canvas:{Image},'@tensorflow/tfjs-node':{},crypto:require('node:crypto'),'./image-input':imageInput,fs:{existsSync:()=>false,writeFileSync(){},readFileSync(){throw Error('Unexpected read')}},resend:{Resend:class{emails={send:async payload=>{sent.push(payload);return{data:{id:'fixture'}}}}}}};
- const context={global:{},require:id=>{assert.ok(Object.hasOwn(modules,id),'Unexpected dependency '+id);return modules[id]},process:{env:{WIDGET_PROVISION_SECRET:'service-fixture',RESEND_API_KEY:'offline-fixture'},on(){}},console:quiet,Buffer,Map,Set,Date,Promise,setTimeout,clearTimeout};
- const source=fs.readFileSync(file,'utf8').split("console.log('🚀 Starting server...');")[0];vm.runInNewContext(source+'\nglobalThis.audit={loadModels,reset(){modelsLoaded=false}};',context);
+ const modules={dotenv:{config(){}},express:Object.assign(()=>app,{json:()=>()=>{}}),cors:()=>()=>{},'express-rate-limit':limiter,'node-cache':Cache,'@vladmandic/face-api':api,canvas:{Image},'@tensorflow/tfjs-node':{},crypto:require('node:crypto'),'./image-input':imageInput,'./inference-gate':require('../inference-gate'),fs:{existsSync:()=>false,writeFileSync(){},readFileSync(){throw Error('Unexpected read')}},resend:{Resend:class{emails={send:async payload=>{sent.push(payload);return{data:{id:'fixture'}}}}}}};
+ const context={global:{},require:id=>{assert.ok(Object.hasOwn(modules,id),'Unexpected dependency '+id);return modules[id]},process:{memoryUsage:()=>({rss:128*1024*1024,heapUsed:32*1024*1024}),env:{WIDGET_PROVISION_SECRET:'service-fixture',RESEND_API_KEY:'offline-fixture'},on(){}},console:quiet,Buffer,Map,Set,Date,Promise,AbortController,setTimeout,clearTimeout};
+ const source=fs.readFileSync(file,'utf8').split("console.log('🚀 Starting server...');")[0];vm.runInNewContext(source+'\nglobalThis.audit={loadModels,gate:inferenceGate,reset(){modelsLoaded=false}};',context);
  const a=context.audit.loadModels(),b=context.audit.loadModels();releaseCore();await Promise.all([a,b]);assert.equal(modelCalls,5,'concurrent initialization loads each network once');
  context.audit.reset();coreFails=true;const failures=await Promise.allSettled([context.audit.loadModels(),context.audit.loadModels()]);assert.ok(failures.every(r=>r.status==='rejected'));coreFails=false;await context.audit.loadModels();assert.equal(modelCalls,13,'failed startup can retry without duplicating concurrent work');
  async function call(method,route,body={},query={},auth='',ip='fixture'){
-  let result,status=200;const req={body,query,headers:{authorization:auth},ip};const res={status(code){status=code;return this},json(value){result=value;return this}};const handlers=routes.get(method+' '+route);const next=async(index=0)=>handlers[index]?.(req,res,()=>next(index+1));await next();return{result,status};
+  let result,status=200;const req={body,query,headers:{authorization:auth},ip};const res={once(){},removeListener(){},set(){return this},status(code){status=code;return this},json(value){result=value;return this}};const handlers=routes.get(method+' '+route);const next=async(index=0)=>handlers[index]?.(req,res,()=>next(index+1));await next();return{result,status};
  }
  for(const route of ['/analyze','/landmarks']){const r=await call('POST',route,{image:png(32768,32768).toString('base64')});assert.equal(r.status,413);assert.equal(nativeDecodes,0,'oversized raster must not reach native decoder');assert.equal((await call('POST',route,{image:{}})).status,400)}
+ const heldSlot=await context.audit.gate.acquire();
+ const queuedAnalyze=call('POST','/analyze',{image:png(640,480).toString('base64')});
+ const queuedLandmarks=call('POST','/landmarks',{image:png(640,480).toString('base64')});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(nativeDecodes,0,'queued routes must not create a native image');
+ assert.equal(context.audit.gate.snapshot().queued,2,'both actual routes share the same budget');
+ heldSlot();
+ assert.equal((await queuedAnalyze).status,400);assert.equal((await queuedLandmarks).status,400);
+ assert.equal(context.audit.gate.snapshot().active,0,'decode failure must return capacity');
+ assert.equal(context.audit.gate.snapshot().queued,0);
  const auth='Bearer service-fixture';const key=(await call('POST','/widget-key-provision',{sessionId:'cs_fixture',customerId:'cus_fixture',email:'Owner@Example.invalid'},{},auth)).result.key;
  assert.equal('email' in (await call('GET','/widget-usage',{}, {key})).result,false);
  assert.equal((await call('PATCH','/widget-theme',{key,theme:{primary:'#fff'}})).status,401);
@@ -39,7 +49,7 @@ async function backendTests(file){
  assert.equal((await call('POST','/widget-recover',{email:'nobody4@example.invalid'},{},'','limit-ip')).status,429);
  assert.equal((await call('POST','/widget-recover',{email:{}},{},'','bad-ip')).status,400);
  assert.ok(limitOptions.some(x=>x.windowMs===3600000&&x.max===3));
- console.log('PASS backend: raster headers before decode, startup single flight, widget privacy/theme auth and recovery budgets');
+ console.log('PASS backend (including shared-route capacity/release): raster headers before decode, startup single flight, widget privacy/theme auth and recovery budgets');
 }
 module.exports=backendTests;
 if(require.main===module)backendTests(path.resolve(process.argv[2]||path.join(__dirname,'../server.js'))).catch(error=>{console.error(error);process.exitCode=1});

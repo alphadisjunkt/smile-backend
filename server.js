@@ -8,6 +8,22 @@ const canvas = require('canvas');
 const tf = require('@tensorflow/tfjs-node');
 const crypto = require('crypto');
 const { decodeRequestImage, MAX_SIDE, MAX_PIXELS } = require('./image-input');
+const { createInferenceGate } = require('./inference-gate');
+const inferenceGate = createInferenceGate();
+let inferenceMemoryPeakRss = 0;
+let inferenceCompleted = 0;
+let inferenceTotalMs = 0;
+function inferenceTelemetry() {
+  const memory = process.memoryUsage();
+  return { ...inferenceGate.snapshot(), completed: inferenceCompleted, totalMs: inferenceTotalMs, rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, peakRssBytes: Math.max(inferenceMemoryPeakRss, memory.rss) };
+}
+async function inferenceSlot(req, res) {
+  const controller = new AbortController();
+  const cancel = () => { if (!res.writableFinished) controller.abort(); };
+  res.once('close', cancel);
+  try { return await inferenceGate.acquire(controller.signal); }
+  finally { res.removeListener('close', cancel); }
+}
 
 // Last-resort guards — face-api / tfjs-node can throw native errors that
 // escape the per-route try/catch. We log and stay alive so one poison payload
@@ -374,7 +390,7 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', modelsLoaded });
+  res.json({ status: 'healthy', modelsLoaded, inference: inferenceTelemetry() });
 });
 
 // ═══════════════════════════════════════════════════════
@@ -387,6 +403,8 @@ app.post('/analyze', async (req, res) => {
   
   console.log(`📸 Analysis request #${requestCount} from ${req.ip}`);
   
+  let releaseInference;
+  let inferenceStarted = 0;
   try {
     const { base64Data, buffer } = decodeRequestImage(req.body?.image, 3 * 1024 * 1024);
     const imageHash = hashImage(base64Data);
@@ -399,9 +417,12 @@ app.post('/analyze', async (req, res) => {
     }
     
     console.log('🔄 Loading models...');
+    releaseInference = await inferenceSlot(req, res);
+    inferenceStarted = Date.now();
     await loadModels();
     
     console.log('🖼️  Processing image...');
+    if (res.destroyed) return;
     const img = new Image();
     img.src = buffer;
 
@@ -578,11 +599,20 @@ app.post('/analyze', async (req, res) => {
   } catch (error) {
     const processingTime = Date.now() - startTime;
     console.error(`❌ Analysis error after ${processingTime}ms:`, error);
+    if (error.code === 'request_cancelled') return;
+    if (error.statusCode === 503) return res.set('Retry-After', '1').status(503).json({ error: 'inference_busy', retryAfter: 1 });
     if (global.gc) { try { global.gc() } catch {} }
     res.status(error.statusCode === 400 || error.statusCode === 413 ? error.statusCode : 500).json({
       error: 'Analysis failed',
       message: error.message
     });
+  } finally {
+    if (releaseInference) {
+      inferenceCompleted++;
+      inferenceTotalMs += Date.now() - inferenceStarted;
+      inferenceMemoryPeakRss = Math.max(inferenceMemoryPeakRss, process.memoryUsage().rss);
+      releaseInference();
+    }
   }
 });
 
@@ -596,6 +626,8 @@ app.post('/landmarks', async (req, res) => {
   
   console.log(`🔬 Landmarks request #${requestCount} from ${req.ip}`);
   
+  let releaseInference;
+  let inferenceStarted = 0;
   try {
     const { base64Data, buffer } = decodeRequestImage(req.body?.image, 5 * 1024 * 1024);
     const imageHash = 'lm_' + hashImage(base64Data);
@@ -607,8 +639,11 @@ app.post('/landmarks', async (req, res) => {
       return res.json(cachedResult);
     }
     
+    releaseInference = await inferenceSlot(req, res);
+    inferenceStarted = Date.now();
     await loadModels();
 
+    if (res.destroyed) return;
     const img = new Image();
     img.src = buffer;
 
@@ -760,7 +795,16 @@ app.post('/landmarks', async (req, res) => {
     
   } catch (error) {
     console.error(`❌ Landmarks error:`, error);
+    if (error.code === 'request_cancelled') return;
+    if (error.statusCode === 503) return res.set('Retry-After', '1').status(503).json({ error: 'inference_busy', retryAfter: 1 });
     res.status(error.statusCode === 400 || error.statusCode === 413 ? error.statusCode : 500).json({ error: 'Landmarks extraction failed', message: error.message });
+  } finally {
+    if (releaseInference) {
+      inferenceCompleted++;
+      inferenceTotalMs += Date.now() - inferenceStarted;
+      inferenceMemoryPeakRss = Math.max(inferenceMemoryPeakRss, process.memoryUsage().rss);
+      releaseInference();
+    }
   }
 });
 
@@ -1339,7 +1383,7 @@ loadModels().then(() => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`💰 Rate limit: 50 requests per 15 minutes per IP`);
+  console.log(`💰 Rate limit: 200 requests per 15 minutes per IP; 20 per 30 seconds`);
   console.log(`💾 Cache enabled: 1 hour TTL`);
   console.log(`📊 Total analyses: ${totalCount}`);
 });
